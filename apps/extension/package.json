@@ -1,0 +1,14 @@
+{
+  "name": "comment-copilot-extension",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "plasmo dev",
+    "build": "plasmo build"
+  },
+  "dependencies": {
+    "plasmo": "^0.86.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}

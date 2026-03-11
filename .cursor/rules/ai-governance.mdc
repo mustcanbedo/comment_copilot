@@ -1,0 +1,36 @@
+---
+description: AI 模型选择、成本控制、Prompt 管理规范，每次对话必须遵守
+alwaysApply: true
+---
+
+# AI 治理规则
+
+## 模型选择（按任务选最低成本够用的模型）
+
+| 任务 | 首选 | 降级 |
+|---|---|---|
+| 垃圾过滤 / 快速分类 | 关键词规则 | FastText |
+| 意图识别（🔥✨👀🚫） | DeepSeek-V3 | keyword boost |
+| 评论回复生成 | DeepSeek-V3（中文）；GPT-4o（多语言/英文） | 历史高赞模板 |
+| 私信脚本生成 | GPT-4o long-form | 预置 SOP |
+
+**禁止用 GPT-4o 做意图分类或垃圾过滤。中文回复默认优先使用 DeepSeek-V3，仅在多语言/英文场景或特定租户策略下使用 GPT-4o。**
+
+## 成本约束
+
+- 禁止在循环内逐条调用 AI；批量处理走 BullMQ 队列，每批 ≤20 条
+- 相同 `(persona_id + comment_fingerprint)` 的结果缓存 Redis，TTL 24h
+- 每次调用必须设置 `max_tokens`：回复生成 ≤300，私信 ≤600
+- 月度 token 超 80% 预算时自动切换低成本模型并告警
+
+## Prompt 管理
+
+- Prompt 文件统一放在 `modules/ai/prompts/`，如 `intent.prompt.ts`
+- 禁止将 Prompt 硬编码在 controller 或 service 主逻辑中
+- Prompt 必须返回 JSON；结构化字段优于自由文本
+- 每次 AI 调用记录 `(model, input_tokens, output_tokens, latency_ms)` 到 `ai_call_logs`
+
+## 安全词
+
+生成内容中禁止出现：`微信` `手机号` `加我` `外部联系`。
+替代方案：引导至平台官方名片或留资卡片。

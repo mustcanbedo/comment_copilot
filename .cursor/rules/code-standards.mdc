@@ -1,0 +1,48 @@
+---
+description: TypeScript/NestJS/Plasmo 编码规范，适用于所有 TS/TSX 文件
+globs: **/*.ts,**/*.tsx
+alwaysApply: false
+---
+
+# 编码规范
+
+## 命名
+
+- 变量/函数：`camelCase`；类/组件：`PascalCase`；常量：`UPPER_CASE`
+- 文件名：`comments.service.ts`、`comments.controller.ts`、`use-comments.ts`
+
+## NestJS 后端
+
+每个 module 必须包含 `controller / service / dto / entity`，单文件不超过 50 行业务逻辑。
+
+```typescript
+// ✅ 正确：守卫注入 tenant_id，service 强制过滤
+@Get()
+findAll(@TenantId() tenantId: string) {
+  return this.commentsService.findAll(tenantId);
+}
+
+// ❌ 错误：跨租户查询
+findAll() { return this.repo.find(); }
+```
+
+日志：用 `this.logger.log/error()`，禁止 `console.log`。
+
+错误：抛 NestJS 内置异常（`BadRequestException` 等），禁止 throw 原始字符串。
+
+## Chrome 插件（Plasmo）
+
+- `content/`：仅做 DOM 解析，禁止直接 fetch API
+- `background/`：API 通信和消息路由
+- `sidebar/`：纯 UI 组件，通过 `chrome.runtime.sendMessage` 获取数据
+
+```typescript
+// ✅ content → background → API 的正确通信路径
+chrome.runtime.sendMessage({ type: 'SEND_COMMENTS', payload: comments });
+```
+
+## 通用
+
+- 优先编辑已有文件，不新建文件
+- 函数控制在 50 行内；避免过度抽象
+- 禁止生成无关注释和冗余类型定义

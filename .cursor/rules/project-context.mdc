@@ -1,0 +1,37 @@
+---
+description: Comment Copilot 项目背景、目录结构、模块边界，每次对话必须遵守
+alwaysApply: true
+---
+
+# Comment Copilot 项目上下文
+
+**定位**：面向小红书/抖音/快手带货创作者的评论转化 SaaS。核心链路：评论抓取 → AI 回复 → 潜客识别 → 私信转化 → 数据复盘。
+
+## 四大模块
+
+| 模块 | 职责 | Phase |
+|---|---|---|
+| Comment Copilot | 评论聚合、AI 回复生成、人工审核 | P1 MVP |
+| Lead Scanner | 意向评分（🔥✨👀🚫）、潜客看板、SLA 提醒 | P2 |
+| DM Convertor | 私信脚本生成、留资卡片、转化追踪 | P3 |
+| Viral Analyzer | 爆款内容解析、自动周报 | P4 |
+
+## 目录结构（不得随意新增顶层目录）
+
+```
+apps/
+  extension/        # Plasmo Chrome 插件
+  web-admin/        # React 管理后台
+services/
+  api/              # NestJS 后端，modules/ 下按模块拆分
+packages/
+  database/         # Drizzle/Prisma schema + migrations
+  shared/           # 跨端公共类型
+```
+
+## 硬性约束
+
+- 禁止引入 architecture_rules 未列出的框架
+- 所有业务表必须有 `tenant_id`，服务层强制过滤（RLS）
+- 评论默认不自动发送，需人工确认；发送节流 ≥30s/条
+- 敏感词（微信号/手机号）替换为官方名片，所有自动操作写入 `audit_logs`

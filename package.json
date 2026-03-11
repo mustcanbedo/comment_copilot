@@ -1,0 +1,13 @@
+{
+  "name": "comment-copilot-monorepo",
+  "private": true,
+  "scripts": {
+    "dev:extension": "cd apps/extension && pnpm dev",
+    "dev:api": "cd services/api && pnpm start:dev"
+  },
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ]
+}
