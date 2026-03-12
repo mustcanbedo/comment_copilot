@@ -1,0 +1,270 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-size: 13px;
+  background: #f7f7f8;
+  color: #1a1a1a;
+  width: 360px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Header */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ff2442;
+}
+
+.refresh-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e8e8e8;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.refresh-btn:hover { background: #f5f5f5; }
+.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Stats */
+.stats-row {
+  display: flex;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  gap: 0;
+}
+
+.stat-item {
+  flex: 1;
+  text-align: center;
+}
+
+.stat-item + .stat-item {
+  border-left: 1px solid #f0f0f0;
+}
+
+.stat-num {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1a1a1a;
+  line-height: 1.2;
+}
+
+.stat-item.hot .stat-num { color: #ff2442; }
+
+.stat-label {
+  display: block;
+  font-size: 11px;
+  color: #999;
+  margin-top: 2px;
+}
+
+/* Filter */
+.filter-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.filter-btn {
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid #e8e8e8;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.filter-btn:hover { background: #f5f5f5; }
+
+.filter-btn.active {
+  background: #ff2442;
+  border-color: #ff2442;
+  color: #fff;
+}
+
+/* Empty */
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 40px 24px;
+  color: #bbb;
+  text-align: center;
+}
+
+.hint { font-size: 11px; color: #ccc; }
+
+/* Comment List */
+.comment-list {
+  flex: 1;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comment-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.comment-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.author {
+  font-weight: 600;
+  font-size: 12px;
+  color: #333;
+}
+
+.intent-badge {
+  font-size: 11px;
+  color: #888;
+}
+
+.comment-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+/* Buttons */
+.reply-btn {
+  width: 100%;
+  padding: 8px;
+  background: linear-gradient(135deg, #ff2442, #ff6b81);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.reply-btn:hover { opacity: 0.9; }
+
+.ai-loading {
+  text-align: center;
+  font-size: 12px;
+  color: #aaa;
+  padding: 8px 0;
+}
+
+.ai-error {
+  text-align: center;
+  font-size: 12px;
+  color: #ff4444;
+  padding: 6px 0;
+}
+
+/* Suggestions */
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggestion-item {
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.suggestion-text {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #333;
+  word-break: break-all;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  color: #555;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover { background: #f5f5f5; }
+
+.copy-btn.copied {
+  background: #e8f5e9;
+  border-color: #a5d6a7;
+  color: #388e3c;
+}
+
+.regenerate-btn {
+  width: 100%;
+  padding: 6px;
+  background: transparent;
+  border: 1px dashed #ddd;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #aaa;
+  cursor: pointer;
+  margin-top: 2px;
+  transition: all 0.2s;
+}
+
+.regenerate-btn:hover {
+  border-color: #ff2442;
+  color: #ff2442;
+}

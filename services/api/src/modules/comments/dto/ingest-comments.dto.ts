@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { IsArray, IsISO8601, IsOptional, IsString, ValidateNested } from 'class-validator'
+import { IsArray, IsISO8601, IsString, ValidateNested } from 'class-validator'
 
 export class CommentItemDto {
   @IsString()
@@ -13,6 +13,9 @@ export class CommentItemDto {
 
   @IsISO8601()
   commentedAt!: string
+
+  @IsString()
+  postUrl!: string
 }
 
 export class IngestCommentsDto {

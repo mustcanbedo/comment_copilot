@@ -1,0 +1,1 @@
+ALTER TABLE "comments" ADD COLUMN "is_author_reply" boolean DEFAULT false NOT NULL;

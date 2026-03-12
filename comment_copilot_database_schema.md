@@ -1,428 +1,259 @@
 # Comment Copilot - Database Schema
 
-> 目标：提供面向多租户内容创作者的高可用数据层，支撑「评论抓取 → AI 互动 → 潜客转化 → 报表洞察」全链路。
+> 目标：以最简洁的表结构支撑 MVP 核心链路，避免过度设计。分区、物化视图、RLS 等高级特性在数据量驱动时再引入。
 
-数据库：PostgreSQL 16（主从 + 只读副本），配套 Redis 用于缓存/队列。
+数据库：Neon DB（Serverless PostgreSQL），ORM：Drizzle ORM。
 
-最后更新：2026-03-11（v1.1 优化版）
-
----
-
-## 1. 设计概述
-
-### 1.1 设计原则
-
-1. **多租户隔离**：所有业务表以 `tenant_id`（或 `user_id`）+主键组合索引，避免数据串扰。
-2. **可追溯**：评论/回复/私信的状态流转均有审计记录，保证风控与合规。
-3. **高吞吐**：评论写入采用分区表 + 异步流水线，P95 入库延迟 <3s。
-4. **可扩展**：平台、账号、模型等均以配置驱动，预留扩展字段。
-5. **成本透明**：关键表支持冷热分层、定期归档，便于控制存储与查询成本。
-
-### 1.2 模块映射
-
-| 模块 | 关键表 | 描述 |
-|---|---|---|
-| SaaS 账号/权限 | `users`, `tenants`, `user_memberships`, `roles`, `audit_logs` | 组织管理、RBAC、操作留痕 |
-| 创作者资产 | `creators`, `accounts`, `videos`, `personas` | 多平台账号、视频内容、人设配置 |
-| 评论与互动 | `comments`, `comment_events`, `ai_replies`, `reply_actions` | 评论存储、状态变化、AI 输出、人工操作 |
-| 潜客与转化 | `leads`, `lead_actions`, `dm_conversations`, `deal_records` | 潜客生命周期、私信记录、转化结果 |
-| 运维与洞察 | `reports`, `metrics_daily`, `webhook_events`, `job_queue` | 周报、指标、外部通知、后台任务 |
-
-### 1.3 ER 概览（文本）
-
-```
-tenants ──┐
-          ├─ users ── user_memberships ── roles
-          ├─ creators ── accounts ── videos ── comments ── comment_events
-          │                                           ├─ ai_replies ─ reply_actions
-          │                                           └─ leads ── dm_conversations ─ deal_records
-          ├─ personas
-          └─ reports / metrics_daily / webhook_events
-```
+最后更新：2026-03-12（v2.0 MVP 简化版）
 
 ---
 
-## 2. 命名与通用字段
+## 1. 设计原则
 
-- 主键：`id UUID DEFAULT gen_random_uuid()`。
-- 时间：`created_at TIMESTAMPTZ DEFAULT now()`、`updated_at TIMESTAMPTZ DEFAULT now()`（触发器自动更新）。
-- 软删：重要表加 `deleted_at TIMESTAMPTZ`（默认 `NULL`）。
-- 枚举：使用 PostgreSQL ENUM（`status_comment`, `intent_level`, ...）或字符串 + CHECK 约束。
-- 多租户：关键表包含 `tenant_id UUID REFERENCES tenants(id)`。
+1. **够用即可**：MVP 阶段只建核心表，不预建未来表。
+2. **多租户隔离**：所有业务表包含 `tenant_id`，应用层强制过滤。
+3. **字符串枚举**：`intent_level` 等字段使用 `'hot'/'warm'/'cold'/'spam'` 字符串，UI 层映射 Emoji，避免数据库 Emoji 编码问题。
+4. **UUID 主键**：全部使用 `gen_random_uuid()`，适合 Serverless 分布式环境。
+5. **不分区**：MVP 阶段（评论量 < 500 万行）不使用分区表，待真实性能瓶颈出现后再引入。
 
 ---
 
-## 3. 核心表设计
+## 2. 表结构（Drizzle Schema）
 
-### 3.1 Tenants & Users
+### 2.1 Tenants（租户）
 
-```sql
-CREATE TABLE tenants (
-  id UUID PRIMARY KEY,
-  name TEXT NOT NULL,
-  plan_code TEXT NOT NULL,
-  status TEXT DEFAULT 'active',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+合并了原 `tenants` + `tenant_settings`，减少 JOIN 查询：
 
-CREATE TABLE users (
-  id UUID PRIMARY KEY,
-  email CITEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  full_name TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+export const tenants = pgTable('tenants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  apiKey: text('api_key').notNull().unique(),
+  planCode: text('plan_code').default('basic').notNull(),
+  status: text('status').default('active').notNull(),
 
-CREATE TABLE user_memberships (
-  tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT CHECK (role IN ('admin','editor','viewer')),
-  PRIMARY KEY (tenant_id, user_id)
-);
+  // 人设配置（原 tenant_settings）
+  persona: text('persona').default(''),
+  defaultModel: text('default_model').default('deepseek-chat').notNull(),
+  sendThrottleCommentMs: integer('send_throttle_comment_ms').default(30000).notNull(),
+  sendThrottleDmMs: integer('send_throttle_dm_ms').default(60000).notNull(),
+  monthlyTokenBudget: integer('monthly_token_budget').default(1000000).notNull(),
+  autoReplyEnabled: boolean('auto_reply_enabled').default(false).notNull(),
+  intentThresholds: jsonb('intent_thresholds')
+    .$type<{ hot: number; warm: number; cold: number }>()
+    .default({ hot: 0.8, warm: 0.5, cold: 0.2 }),
 
-CREATE TABLE audit_logs (
-  id BIGSERIAL PRIMARY KEY,
-  tenant_id UUID NOT NULL,
-  actor_id UUID,
-  resource TEXT,
-  action TEXT,
-  payload JSONB,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_audit_tenant ON audit_logs(tenant_id, created_at DESC);
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
 ```
 
-### 3.2 Creators & Accounts & Personas
+### 2.2 Users（用户）
 
-```sql
-CREATE TABLE creators (
-  id UUID PRIMARY KEY,
-  tenant_id UUID NOT NULL REFERENCES tenants(id),
-  display_name TEXT,
-  timezone TEXT DEFAULT 'Asia/Shanghai',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+MVP 阶段简化：移除 `roles` / `user_roles` 表，`role` 字段直接存在 `users` 表：
 
-CREATE TABLE accounts (
-  id UUID PRIMARY KEY,
-  creator_id UUID REFERENCES creators(id) ON DELETE CASCADE,
-  tenant_id UUID NOT NULL REFERENCES tenants(id),
-  platform TEXT CHECK (platform IN ('xiaohongshu','douyin','kuaishou','other')),
-  platform_user_id TEXT,
-  username TEXT,
-  auth_state JSONB,
-  status TEXT DEFAULT 'active',
-  UNIQUE(platform, platform_user_id)
-);
-CREATE INDEX idx_accounts_tenant ON accounts(tenant_id);
-
-CREATE TABLE personas (
-  id UUID PRIMARY KEY,
-  account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
-  name TEXT,
-  tone JSONB,            -- 语气、emoji、禁用词
-  templates JSONB,       -- 评论/私信模板
-  metadata JSONB,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash'),
+  fullName: text('full_name').default(''),
+  role: text('role').default('owner').notNull(), // 'owner' | 'editor' | 'viewer'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
 ```
 
-### 3.3 Videos / Posts
+### 2.3 Accounts（平台账号）
 
-```sql
-CREATE TABLE videos (
-  id UUID PRIMARY KEY,
-  account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
-  platform TEXT,
-  platform_video_id TEXT,
-  url TEXT,
-  title TEXT,
-  published_at TIMESTAMPTZ,
-  metrics JSONB,
-  UNIQUE(account_id, platform_video_id)
-);
-CREATE INDEX idx_videos_account_published ON videos(account_id, published_at DESC);
+```typescript
+export const accounts = pgTable('accounts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  platform: text('platform').notNull(), // 'xiaohongshu' | 'douyin' | 'kuaishou'
+  platformUserId: text('platform_user_id').default(''),
+  username: text('username').default(''),
+  status: text('status').default('active').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  uniq: unique().on(t.platform, t.platformUserId),
+  idxTenant: index('idx_accounts_tenant').on(t.tenantId),
+}))
 ```
 
-### 3.4 Comments（分区表）
+### 2.4 Comments（评论）
 
-```sql
-CREATE TABLE comments (
-  tenant_id UUID NOT NULL,
-  id UUID NOT NULL,
-  video_id UUID REFERENCES videos(id) ON DELETE CASCADE,
-  platform_comment_id TEXT,
-  parent_comment_id UUID,
-  author_name TEXT,
-  author_id TEXT,
-  content TEXT,
-  language TEXT,
-  intent_score NUMERIC(5,2),
-  intent_level TEXT CHECK (intent_level IN ('🔥','✨','👀','🚫')),
-  status TEXT DEFAULT 'new',
-  commented_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY (tenant_id, id)
-) PARTITION BY RANGE (commented_at);
+**不分区**，单表存储，MVP 阶段完全够用：
 
--- 每月分区
-CREATE TABLE comments_2026_03 PARTITION OF comments
-  FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-
-CREATE INDEX idx_comments_video ON comments_2026_03(video_id, commented_at);
-CREATE INDEX idx_comments_intent ON comments_2026_03(intent_level);
+```typescript
+export const comments = pgTable('comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  accountId: uuid('account_id').references(() => accounts.id),
+  platform: text('platform').notNull(),
+  platformCommentId: text('platform_comment_id').notNull(),
+  authorName: text('author_name').notNull(),
+  authorId: text('author_id').default(''),
+  content: text('content').notNull(),
+  postUrl: text('post_url').default(''),
+  intentLevel: text('intent_level').default('cold'), // 'hot' | 'warm' | 'cold' | 'spam'
+  intentScore: numeric('intent_score', { precision: 5, scale: 2 }),
+  status: text('status').default('pending').notNull(), // 'pending' | 'replied' | 'ignored'
+  commentedAt: timestamp('commented_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqComment: unique().on(t.tenantId, t.platform, t.platformCommentId),
+  idxTenant: index('idx_comments_tenant').on(t.tenantId, t.commentedAt),
+  idxIntent: index('idx_comments_intent').on(t.tenantId, t.intentLevel),
+}))
 ```
 
-### 3.5 Comment Events & AI Replies
+### 2.5 AI Replies（AI 回复建议）
 
-```sql
-CREATE TABLE comment_events (
-  id BIGSERIAL PRIMARY KEY,
-  tenant_id UUID,
-  comment_id UUID,
-  event_type TEXT CHECK (event_type IN ('ingested','scored','replied','rejected','archived')),
-  payload JSONB,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE ai_replies (
-  id UUID PRIMARY KEY,
-  tenant_id UUID NOT NULL,
-  comment_id UUID NOT NULL, -- 通过 (tenant_id, comment_id) 与 comments 对齐，应用层保证引用完整性
-  persona_id UUID REFERENCES personas(id),
-  content TEXT,
-  model TEXT,
-  confidence NUMERIC(4,3),
-  status TEXT CHECK (status IN ('generated','approved','sent','rejected')),
-  created_at TIMESTAMPTZ DEFAULT now(),
-  sent_at TIMESTAMPTZ
-);
-CREATE INDEX idx_ai_replies_comment ON ai_replies(tenant_id, comment_id);
-
-CREATE TABLE reply_actions (
-  id BIGSERIAL PRIMARY KEY,
-  ai_reply_id UUID REFERENCES ai_replies(id),
-  actor_id UUID,
-  action TEXT CHECK (action IN ('approve','edit','reject','send')),
-  note TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+export const aiReplies = pgTable('ai_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  commentId: uuid('comment_id').notNull().references(() => comments.id),
+  suggestions: jsonb('suggestions').notNull().$type<string[]>(),
+  selectedIndex: integer('selected_index'), // 用户选择了哪条，null 表示未选
+  modelUsed: text('model_used').notNull(),
+  promptTokens: integer('prompt_tokens').default(0),
+  completionTokens: integer('completion_tokens').default(0),
+  costUsd: numeric('cost_usd', { precision: 10, scale: 6 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  idxComment: index('idx_ai_replies_comment').on(t.commentId),
+}))
 ```
 
-### 3.6 Leads & 转化
+### 2.6 Leads（潜客）
 
-```sql
-CREATE TABLE leads (
-  id UUID PRIMARY KEY,
-  tenant_id UUID NOT NULL,
-  comment_id UUID NOT NULL, -- 与 comments 的 id 对齐，结合 tenant_id 使用
-  assigned_to UUID REFERENCES users(id),
-  intent_level TEXT,
-  stage TEXT CHECK (stage IN ('new','contacted','nurturing','converted','lost')),
-  score INT,
-  source TEXT, -- comment / dm / import
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE lead_actions (
-  id BIGSERIAL PRIMARY KEY,
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
-  actor_id UUID,
-  action TEXT,
-  payload JSONB,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE dm_conversations (
-  id UUID PRIMARY KEY,
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
-  platform_thread_id TEXT,
-  status TEXT DEFAULT 'open',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 私信消息量级可达数百万，采用按月分区
-CREATE TABLE dm_messages (
-  tenant_id UUID NOT NULL,
-  id BIGINT NOT NULL,
-  conversation_id UUID REFERENCES dm_conversations(id) ON DELETE CASCADE,
-  sender TEXT CHECK (sender IN ('creator','lead','system')),
-  content TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY (tenant_id, id)
-) PARTITION BY RANGE (created_at);
-
-CREATE TABLE dm_messages_2026_03 PARTITION OF dm_messages
-  FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-
-CREATE TABLE deal_records (
-  id UUID PRIMARY KEY,
-  lead_id UUID REFERENCES leads(id),
-  amount NUMERIC(12,2),
-  currency TEXT DEFAULT 'CNY',
-  closed_at TIMESTAMPTZ,
-  status TEXT CHECK (status IN ('won','lost','refunded')),
-  reason TEXT
-);
+```typescript
+export const leads = pgTable('leads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  commentId: uuid('comment_id').notNull().references(() => comments.id),
+  intentLevel: text('intent_level').notNull(), // 'hot' | 'warm'
+  stage: text('stage').default('new').notNull(), // 'new' | 'contacted' | 'converted' | 'lost'
+  note: text('note').default(''),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  idxTenant: index('idx_leads_tenant').on(t.tenantId, t.stage),
+}))
 ```
 
-### 3.7 报表 & 任务
+### 2.7 AI Call Logs（AI 调用日志）
 
-```sql
-CREATE TABLE reports (
-  id UUID PRIMARY KEY,
-  tenant_id UUID,
-  report_type TEXT,
-  period_start DATE,
-  period_end DATE,
-  data JSONB,
-  generated_at TIMESTAMPTZ DEFAULT now()
-);
+用于成本分析和告警：
 
-CREATE TABLE metrics_daily (
-  tenant_id UUID,
-  metric_date DATE,
-  metric_name TEXT,
-  metric_value NUMERIC,
-  PRIMARY KEY (tenant_id, metric_date, metric_name)
-);
-
-CREATE TABLE job_queue (
-  id BIGSERIAL PRIMARY KEY,
-  tenant_id UUID REFERENCES tenants(id),
-  job_type TEXT,
-  payload JSONB,
-  run_at TIMESTAMPTZ,
-  status TEXT DEFAULT 'pending',
-  attempts INT DEFAULT 0,
-  last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_job_queue_tenant ON job_queue(tenant_id, status, run_at);
-
-CREATE TABLE webhook_events (
-  id UUID PRIMARY KEY,
-  tenant_id UUID,
-  endpoint TEXT,
-  event_name TEXT,
-  payload JSONB,
-  status TEXT DEFAULT 'queued',
-  retry_count INT DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+export const aiCallLogs = pgTable('ai_call_logs', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  model: text('model').notNull(),
+  taskType: text('task_type').notNull(), // 'reply' | 'intent' | 'dm_script'
+  inputTokens: integer('input_tokens').default(0),
+  outputTokens: integer('output_tokens').default(0),
+  latencyMs: integer('latency_ms'),
+  costUsd: numeric('cost_usd', { precision: 10, scale: 6 }),
+  status: text('status').notNull(), // 'success' | 'error' | 'timeout'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  idxTenantDate: index('idx_ai_logs_tenant_date').on(t.tenantId, t.createdAt),
+}))
 ```
 
-### 3.8 Tenant Settings & AI Call Logs
+### 2.8 Selector Configs（DOM 选择器热更新）
 
-```sql
-CREATE TABLE tenant_settings (
-  tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
-  intent_thresholds JSONB DEFAULT '{"hot":0.8,"warm":0.5,"cold":0.2}',
-  send_throttle_comment_ms INT DEFAULT 30000,
-  send_throttle_dm_ms INT DEFAULT 60000,
-  monthly_token_budget INT DEFAULT 1000000,
-  auto_reply_enabled BOOLEAN DEFAULT false,
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
+```typescript
+export const selectorConfigs = pgTable('selector_configs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  platform: text('platform').notNull().unique(), // 'xiaohongshu' | 'douyin'
+  version: text('version').notNull(), // e.g. '2026.03.12'
+  selectors: jsonb('selectors').notNull().$type<{
+    commentList: string
+    authorName: string
+    content: string
+    timestamp: string
+    commentId: string
+  }>(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+```
 
-CREATE TABLE ai_call_logs (
-  id BIGSERIAL PRIMARY KEY,
-  tenant_id UUID NOT NULL,
-  model TEXT NOT NULL,
-  task_type TEXT CHECK (task_type IN ('intent','reply','dm_script','spam_filter')),
-  input_tokens INT,
-  output_tokens INT,
-  latency_ms INT,
-  cost_usd NUMERIC(10,6),
-  status TEXT CHECK (status IN ('success','error','timeout')),
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_ai_logs_tenant_date ON ai_call_logs(tenant_id, created_at DESC);
+### 2.9 Audit Logs（操作审计）
+
+```typescript
+export const auditLogs = pgTable('audit_logs', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  actorId: uuid('actor_id'),
+  resource: text('resource'),
+  action: text('action'),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  idxTenant: index('idx_audit_tenant').on(t.tenantId, t.createdAt),
+}))
 ```
 
 ---
 
-## 4. 索引与性能策略
+## 3. 精简后的 ER 关系
 
-1. **分区**：`comments`, `comment_events`, `dm_messages` 采用按月分区，便于冷热分层与快速清理。
-2. **组合索引**：
-   - `comments(video_id, commented_at)` 支撑按视频查询。
-   - `leads(tenant_id, stage, updated_at DESC)` 支撑潜客看板。
-   - `ai_replies(comment_id, status)` 支撑审核查询。
-3. **全文检索**：`comments`、`dm_messages` 可增加 `tsvector`（中文可用 zhparser + ngram）。
-4. **物化视图**：`mv_lead_funnel_daily` 汇总转化漏斗，定时刷新。
-5. **缓存**：Redis 存储热评论、模版、人设配置；设置 TTL + 版本号。
-6. **异步写**：AI 日志、Webhook 通过 `job_queue` 异步处理，避免阻塞核心事务。
-
----
-
-## 5. 数据治理
-
-### 5.1 权限与安全
-
-- 所有表以 `tenant_id` 过滤，API 层实施 Row Level Security (RLS)。
-- 敏感字段（手机号、留资链接）使用 `pgcrypto` 列级加密。
-- `audit_logs` 保留 180 天；归档到对象存储后可删除。
-
-### 5.2 备份与恢复
-
-- PITR：持续 WAL 归档 + 日度全量备份（保留 30 天）。
-- 灾备：异地只读节点可在 15 分钟内提升为主库。
-
-### 5.3 数据生命周期
-
-- `comments`：保存 12 个月，超过后转移至冷数据仓库（Snowflake / BigQuery）。
-- `dm_messages`：保留 18 个月，可按租户配置更短周期以满足 GDPR/数据最小化要求。
-- `reports`：保留 24 个月，之后仅存聚合指标。
+```
+tenants ──┬── users
+          ├── accounts ── comments ── ai_replies
+          │                       └── leads
+          ├── ai_call_logs
+          ├── audit_logs
+          └── selector_configs（全局，无 tenant_id）
+```
 
 ---
 
-## 6. 计算指标与意向评分
+## 4. 与 v1.1 的对比（简化内容）
 
-意向公式：`I = w1*S + w2*F + w3*C + w4*R`
-
-| 项 | 说明 | 数据来源 |
-|---|---|---|
-| S (Semantic) | 关键词、问价/链接等语义信号 | `comments.content` NLP 特征 |
-| F (Frequency) | 历史互动频率、连发评论 | `comment_events` 聚合 |
-| C (Context) | 视频类型、发布时间、平台权重 | `videos.metrics` + 平台配置 |
-| R (Relationship) | 既有私域关系/粉丝标签 | `leads` / CRM 回写 |
-
-- 模型输出 `intent_score`、`intent_level`，同时写入 `comment_events`。
-- 决策阈值可按租户配置，写入 `tenant_settings`（可选表）。
-
----
-
-## 7. 扩展与演进
-
-1. **多平台**：`accounts.platform` + `videos.platform` + `comments.language` 支撑扩展至 Instagram、YouTube 等；若需不同字段，可通过 `platform_metadata JSONB` 存储特定结构。
-2. **MCN 多账号**：`creators` 作为组织节点，`accounts`、`videos` 与之关联，借助 `user_memberships` 控制权限。
-3. **模型自训练**：新增 `training_samples` 表（存储人工标注样本），便于蒸馏/微调。
-4. **多区域部署**：可在不同 Region 维持独立主库，利用 Debezium + Kafka 进行增量同步至数据湖。
-
----
-
-## 8. 数据量预估与容量规划
-
-| 维度 | 假设 | 12 个月数据量 | 建议 |
+| 变更项 | v1.1（旧） | v2.0（新） | 原因 |
 |---|---|---|---|
-| 创作者账号 | 1,000 | 1,000 rows | 单表无需特别优化 |
-| 视频 | 每账号 10 条 | 10,000 rows | 常规模式 |
-| 评论 | 视频均 1,000 评论 | 10,000,000 rows | 月分区 + 索引 200GB 级别 |
-| 潜客 | 评论 5% 产生 lead | 500,000 rows | 需组合索引 |
-| 私信消息 | 每 lead 5 条 | 2,500,000 rows | 分区 + 压缩 |
-
-硬件建议：主库 8 vCPU / 64GB RAM，NVMe SSD；只读副本用于报表，Auto-VACUUM 参数按高写入调优。
+| `comments` 表 | 按月分区 | 单表 | MVP 数据量不需要分区 |
+| `dm_messages` 表 | 按月分区 | 暂不建表 | M1 再引入 |
+| `tenant_settings` 表 | 独立表 | 合并到 `tenants` | 减少 JOIN |
+| `roles` / `user_roles` 表 | 独立表 | `users.role` 字段 | MVP 不需要复杂 RBAC |
+| `intent_level` 枚举 | Emoji（`🔥✨👀🚫`） | 字符串（`hot/warm/cold/spam`） | 避免编码问题 |
+| `comment_events` 表 | 存在 | 暂不建表 | 用 `comments.status` 字段替代 |
+| `creators` / `videos` 表 | 存在 | 暂不建表 | M1 再引入 |
+| `reports` / `metrics_daily` 表 | 存在 | 暂不建表 | M2 再引入 |
+| 物化视图 | 规划 | 不引入 | 数据量不到瓶颈 |
+| RLS | 规划 | 不引入 | 应用层过滤已足够 |
 
 ---
 
-## 9. 总结
+## 5. 数据量预估（MVP 阶段）
 
-- **结构化领域模型**：从 SaaS 用户→创作者→账号→内容→评论→潜客→成交的链路全量建模。
-- **可运营的数据资产**：事件、审计、指标、报表表支撑运营与合规需求。
-- **可扩展的基础**：通过分区、缓存、异步任务、RLS 等手段支持更高并发与更多平台。
+| 维度 | 假设 | 数据量 | 建议 |
+|---|---|---|---|
+| 租户 | 100 | 100 rows | 无需优化 |
+| 评论 | 每租户 1k/月 | 100k rows/月 | 单表 + 索引完全够用 |
+| AI 回复 | 每评论 1 次 | 100k rows/月 | 同上 |
+| AI 调用日志 | 每次调用 1 条 | 100k rows/月 | 同上 |
 
-该 Schema 将随产品版本迭代（PRD & 架构文档）同步更新，并在发布前进行 Migration Review。
+**分区引入时机**：当 `comments` 表超过 500 万行时，通过 `pg_partman` 引入按月分区。
+
+---
+
+## 6. Migration 策略
+
+使用 `drizzle-kit` 管理 migration：
+
+```bash
+# 生成 migration 文件
+npm run db:generate
+
+# 执行 migration（连接 Neon DB）
+npm run db:migrate
+```
+
+Migration 文件纳入 Git 版本控制，每次 Schema 变更都生成新的 migration 文件，不直接修改已有文件。
