@@ -15,5 +15,5 @@ pnpm-lock.yaml
 .tools/
 .npm-cache/
 .pnpm-store/
-package-lock.json
+pnpm-lock.yaml
 config.yaml
