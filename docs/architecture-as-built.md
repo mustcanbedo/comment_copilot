@@ -1,33 +1,33 @@
 # Comment Copilot — 已实现技术架构
 
-> 面向后端协作者：描述当前线上/仓库内已实现的后端边界、目录、API 与数据流。规划中的 Inngest/Redis 等不在此文档范围。
+> 面向后端协作者：描述当前仓库内已实现的后端边界、目录、API 与数据流。
 
-最后更新：2026-03-13
+最后更新：2026-03-14
 
-- **使用逻辑与用户动线**（插件为主、Web 为数据分析、两端身份如何打通）见 [usage-flow.md](usage-flow.md)。
+- **使用逻辑与用户动线**见 [usage-flow.md](usage-flow.md)。
 
 ---
 
 ## 1. 系统边界（已实现）
 
-当前仅存在一条后端链路：Chrome Extension (Plasmo) → Next.js (Vercel) → Neon DB。无独立 NestJS 服务、无 Redis、无 Inngest 实现。
+当前后端链路：Chrome Extension (Plasmo) → Go 后端 (Gin) → PostgreSQL。
 
 ```mermaid
 flowchart LR
   subgraph client [Client]
     Extension[Chrome Extension]
-    WebApp[Web Dashboard]
   end
   subgraph backend [Backend]
-    NextJS[Next.js API]
+    Go[Go + Gin API]
   end
   subgraph data [Data]
-    Neon[Neon DB]
+    PG[PostgreSQL]
   end
-  Extension --> NextJS
-  WebApp --> NextJS
-  NextJS --> Neon
+  Extension --> Go
+  Go --> PG
 ```
+
+> **已移除**：原 Next.js Web 后端（`web/`）与 NestJS（`services/api/`）均已删除，当前仅保留 Go 后端。
 
 ---
 
@@ -35,28 +35,36 @@ flowchart LR
 
 | 路径 | 职责 |
 |------|------|
-| `web/src/app/api/` | 所有 HTTP 入口（Route Handlers） |
-| `web/src/db/` | Drizzle schema 与连接 |
-| `web/src/auth.ts` | NextAuth 配置；认证后 `session.user.tenantId` 为当前租户 |
+| `backend/cmd/server/main.go` | 入口：加载配置、连接 DB、注册路由、启动服务 |
+| `backend/internal/handler/` | HTTP 处理器（薄层，参数校验 + 调用 service） |
+| `backend/internal/service/` | 业务逻辑 |
+| `backend/internal/repository/` | 数据库访问（GORM） |
+| `backend/internal/middleware/` | JWT 鉴权中间件 |
+| `backend/internal/server/` | 路由注册与 CORS 配置 |
+| `backend/internal/db/` | DB 连接、GORM 模型、AutoMigrate |
+| `backend/internal/config/` | 配置加载（config.yaml via Viper） |
+| `backend/migrations/` | SQL 迁移文件（手动执行或 auto_migrate） |
 
 ### 2.1 API 路由一览
 
-| 路径 | 文件 | 说明 |
+| 路径 | 方法 | 说明 |
 |------|------|------|
-| `POST /api/ingest/comments` | `app/api/ingest/comments/route.ts` | 评论入库（插件上报） |
-| `POST /api/ai/reply` | `app/api/ai/reply/route.ts` | AI 回复生成（DeepSeek） |
-| `GET /api/comments` | `app/api/comments/route.ts` | 评论列表查询 |
-| `GET /api/selectors` | `app/api/selectors/route.ts` | 平台 DOM 选择器配置 |
-| `GET/POST /api/auth/[...nextauth]` | `app/api/auth/[...nextauth]/route.ts` | NextAuth 登录/会话 |
-| `POST /api/auth/register` | `app/api/auth/register/route.ts` | 用户注册（创建 tenant + user） |
-| `GET/POST /api/settings/persona` | `app/api/settings/persona/route.ts` | 人设读取/保存（需 session） |
-| `GET /api/health` | `app/api/health/route.ts` | 健康检查 |
+| `/api/health` | GET | 健康检查 |
+| `/api/auth/register` | POST | 用户注册（创建 tenant + user） |
+| `/api/auth/login` | POST | 登录，返回 JWT token |
+| `/api/auth/logout` | POST | 登出（JWT 无状态，客户端清除即可） |
+| `/api/auth/me` | GET | 获取当前用户信息（需 JWT） |
+| `/api/comments` | GET | 评论列表查询（需 JWT） |
+| `/api/ingest/comments` | POST | 评论入库（插件上报，需 JWT） |
+| `/api/selectors` | GET | 平台 DOM 选择器配置 |
+| `/api/ai/reply` | POST | AI 回复生成（DeepSeek，需 JWT） |
+| `/api/settings/persona` | GET/POST | 人设读取/保存（需 JWT） |
 
 ### 2.2 数据库与迁移
 
-- Schema 定义：`web/src/db/schema.ts`（含 `comments.isAuthorReply` 等，与 [comment_copilot_database_schema.md](comment_copilot_database_schema.md) 对齐）。
-- 连接：`web/src/db/index.ts`（Neon serverless 驱动）。
-- 迁移文件：`web/drizzle/`；执行方式见项目 README（`npx dotenv-cli -e .env.local -- npx drizzle-kit migrate`）。
+- 连接：`backend/internal/db/db.go`（GORM + pgx 驱动）。
+- 模型：`backend/internal/db/models.go`。
+- 迁移：`backend/migrations/`；`config.yaml` 中 `auto_migrate: true` 时启动自动建表，生产环境建议手动执行 SQL 文件。
 
 ---
 
@@ -64,16 +72,16 @@ flowchart LR
 
 | 接口 | 方法 | 鉴权 | 请求要点 | 响应要点 |
 |------|------|------|----------|----------|
-| `/api/ingest/comments` | POST | Header `x-tenant-id` | Body: `{ platform, comments[] }`，每项含 `platformCommentId`, `authorName`, `content`, `commentedAt`, `postUrl?`, `isAuthorReply?` | `{ ok, saved, skipped }` |
-| `/api/ai/reply` | POST | Header `x-tenant-id` | Body: `{ commentId, commentContent, persona? }` | `{ ok, suggestions[] }` 或 `{ ok: false, error }` |
-| `/api/comments` | GET | Header `x-tenant-id` | Query: `intent`, `status`, `limit` | `{ ok, data: Comment[], total }`，已过滤作者回复、按 `createdAt` 正序 |
+| `/api/auth/register` | POST | 无 | `{ email, password, name? }` | `{ ok, userId, tenantId }` |
+| `/api/auth/login` | POST | 无 | `{ email, password }` | `{ token }` |
+| `/api/auth/me` | GET | JWT Bearer | — | `{ id, email, tenantId }` |
+| `/api/ingest/comments` | POST | JWT Bearer | `{ platform, comments[] }` 每项含 `platformCommentId`, `authorName`, `content`, `commentedAt`, `postUrl?`, `isAuthorReply?` | `{ ok, saved, skipped }` |
+| `/api/ai/reply` | POST | JWT Bearer | `{ commentId, commentContent, persona? }` | `{ ok, suggestions[] }` |
+| `/api/comments` | GET | JWT Bearer | Query: `intent`, `status`, `postUrl`, `limit` | `{ ok, data: Comment[], total }` |
 | `/api/selectors` | GET | 无 | Query: `platform` | `{ ok, platform, version, selectors }` |
-| `/api/auth/register` | POST | 无 | Body: `{ email, password, name? }` | `{ ok, userId, tenantId }` 或 `{ ok: false, error }` |
-| `/api/settings/persona` | GET | Session | — | `{ ok, persona, name }` |
-| `/api/settings/persona` | POST | Session | Body: `{ keywords, autoGenerate? }` | `{ ok, persona }` |
-| `/api/health` | GET | 无 | — | `{ status: 'ok' }` |
-
-详细请求/响应示例与错误码见 `docs/api-contract.md`。
+| `/api/settings/persona` | GET | JWT Bearer | — | `{ ok, persona }` |
+| `/api/settings/persona` | POST | JWT Bearer | `{ keywords, autoGenerate? }` | `{ ok, persona }` |
+| `/api/health` | GET | 无 | — | `{ status: "ok" }` |
 
 ---
 
@@ -82,40 +90,45 @@ flowchart LR
 ### 4.1 评论采集
 
 ```
-Content Script (DOM) → Background → POST /api/ingest/comments
-  → 校验 x-tenant-id、platform、comments[]
+Content Script (DOM) → Background → POST /api/ingest/comments (JWT)
+  → 校验 platform、comments[]
   → 按 (tenantId, platform, platformCommentId) 去重
-  → 插入 comments（isAuthorReply 写入 status 与 is_author_reply）
+  → 插入 comments
   → 返回 { saved, skipped }
 ```
 
 ### 4.2 AI 回复
 
 ```
-Sidepanel / Background → POST /api/ai/reply
-  → 校验 x-tenant-id、commentId、commentContent
-  → 读取 tenants.persona / defaultModel
+Sidepanel / Background → POST /api/ai/reply (JWT)
+  → 校验 commentId、commentContent
+  → 读取 tenants.persona
   → 调用 DeepSeek API，解析 JSON suggestions
   → 写入 ai_replies，更新 comments.status = 'replied'
-  → 写入 ai_call_logs
   → 返回 { ok, suggestions }
 ```
 
-### 4.3 列表与设置
+### 4.3 列表查询
 
-- **评论列表**：Dashboard / Sidepanel → `GET /api/comments?intent=&status=&limit=`（Header `x-tenant-id`）→ 查 `comments`，过滤 `isAuthorReply`，按 `createdAt` 正序。
-- **人设**：Web 设置页 → `GET/POST /api/settings/persona`（Session）→ 读/写 `tenants.persona`；POST 支持 `autoGenerate` 时调 DeepSeek 生成人设文案。
+- **侧边栏**：`GET /api/comments?postUrl=<当前页URL>`（JWT）→ 按当前帖子过滤评论。
+- 支持 `intent`、`status`、`limit` 追加过滤，过滤在 SQL 层完成。
 
 ---
 
 ## 5. 认证与多租户
 
-- **Web 控制台 / 设置页**：NextAuth.js（Credentials），Session 中 `session.user.tenantId` 即当前租户；未登录访问 `/dashboard`、`/settings` 会重定向到 `/login`。
-- **插件**：无 NextAuth，使用 Header `x-tenant-id`（插件侧从 storage 或默认值读取），与 Web 登录态分离；后续可改为从 Web 下发 token 或 apiKey。
-- 所有业务表带 `tenant_id`，查询时强制按当前租户过滤。
+- **认证方式**：JWT Bearer Token（登录后由 `/api/auth/login` 下发，客户端存储并在请求头 `Authorization: Bearer <token>` 中携带）。
+- **多租户**：注册时自动创建 tenant，所有业务表带 `tenant_id`，查询时强制按当前 token 对应租户过滤。
+- **插件侧**：登录后把 token 存入 `@plasmohq/storage`，每次请求从 storage 读取并附加到请求头。
 
 ---
 
-## 6. 遗留代码说明
+## 6. 插件目录
 
-- 早期 NestJS 后端（原 `services/api/`）已移除，当前仅保留 `web/` 作为后端，新逻辑一律写在 `web/`。
+| 路径 | 职责 |
+|------|------|
+| `apps/extension/contents/xiaohongshu.ts` | DOM 解析、评论采集、滚动同步 |
+| `apps/extension/sidepanel/index.tsx` | 侧边栏 UI（虚拟列表、滚动联动） |
+| `apps/extension/background.ts` | 消息路由、API 请求代理 |
+| `apps/extension/auth/Login.tsx` | 登录 UI 组件（备用，供后续插件内登录） |
+| `apps/extension/auth/Register.tsx` | 注册 UI 组件（备用） |

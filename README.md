@@ -3,15 +3,15 @@
 > 小红书评论区 AI 助手 —— 自动采集评论、识别高意向用户、一键生成 AI 回复建议。
 
 ![Phase](https://img.shields.io/badge/Phase-1%20MVP-green)
-![Next.js](https://img.shields.io/badge/Next.js-16-black)
+![Go](https://img.shields.io/badge/Backend-Go%20+%20Gin-00ADD8)
 ![Plasmo](https://img.shields.io/badge/Plasmo-Chrome%20Extension-blue)
-![Neon](https://img.shields.io/badge/Database-Neon%20DB-teal)
+![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791)
 
 ---
 
 ## 产品简介
 
-Comment Copilot 是一个 Chrome 插件 + Web 控制台的组合产品，帮助小红书博主和运营人员：
+Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助小红书博主和运营人员：
 
 - **自动采集**笔记下的评论（DOM 解析，非爬虫接口）
 - **识别意向**：高意向（问购买/价格）、中意向、普通、垃圾
@@ -32,7 +32,7 @@ Comment Copilot 是一个 Chrome 插件 + Web 控制台的组合产品，帮助�
 
 | 文档 | 说明 |
 |------|------|
-| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑：插件为主、Web 为数据分析、身份绑定 |
+| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑：插件为主、身份绑定流程 |
 | [docs/architecture-as-built.md](docs/architecture-as-built.md) | 已实现技术架构（API、目录、数据流） |
 | [docs/architecture_comment_copilot.md](docs/architecture_comment_copilot.md) | 技术架构与演进（含规划） |
 | [docs/comment_copilot_database_schema.md](docs/comment_copilot_database_schema.md) | 数据库表结构 |
@@ -47,13 +47,11 @@ Comment Copilot 是一个 Chrome 插件 + Web 控制台的组合产品，帮助�
 
 | 层级 | 技术 |
 |------|------|
-| Web 后端 | Next.js 16 (App Router) + TypeScript |
-| 数据库 | Neon DB (Serverless PostgreSQL) |
-| ORM | Drizzle ORM |
+| 后端 | Go + Gin + GORM |
+| 数据库 | PostgreSQL |
 | AI | DeepSeek-V3 |
 | Chrome 插件 | Plasmo Framework |
-| 部署 | Vercel |
-| 认证 | NextAuth.js v5 |
+| 认证 | JWT（golang-jwt） |
 
 ---
 
@@ -61,34 +59,32 @@ Comment Copilot 是一个 Chrome 插件 + Web 控制台的组合产品，帮助�
 
 ```
 comment_copilot/
-├── web/                        # Next.js Web 应用
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── api/
-│   │   │   │   ├── ingest/comments/   # 评论入库
-│   │   │   │   ├── ai/reply/          # AI 回复生成
-│   │   │   │   ├── comments/          # 评论查询
-│   │   │   │   ├── selectors/         # DOM 选择器热更新
-│   │   │   │   ├── settings/persona/  # 人设配置
-│   │   │   │   └── auth/              # NextAuth 路由
-│   │   │   ├── dashboard/             # 评论控制台
-│   │   │   ├── settings/              # 账号 & 人设设置
-│   │   │   ├── login/                 # 登录页
-│   │   │   └── register/              # 注册页
-│   │   ├── db/
-│   │   │   ├── schema.ts              # Drizzle 表结构
-│   │   │   └── index.ts               # DB 连接
-│   │   ├── auth.ts                    # NextAuth 配置
-│   │   └── middleware.ts              # 路由保护
-│   └── drizzle/                       # 数据库迁移文件
+├── backend/                    # Go 后端
+│   ├── cmd/server/main.go      # 入口
+│   ├── internal/
+│   │   ├── handler/            # HTTP 处理器
+│   │   ├── service/            # 业务逻辑
+│   │   ├── repository/         # 数据库访问
+│   │   ├── middleware/         # 鉴权中间件
+│   │   ├── server/             # 路由注册
+│   │   ├── db/                 # DB 连接与模型
+│   │   └── config/             # 配置加载
+│   ├── migrations/             # SQL 迁移文件
+│   ├── config.yaml             # 运行配置（本地）
+│   └── config.yaml.example     # 配置模板
 │
-└── apps/extension/             # Chrome 插件 (Plasmo)
-    ├── contents/
-    │   └── xiaohongshu.ts      # 小红书 content script
-    ├── sidepanel/
-    │   ├── index.tsx           # 侧边栏 UI
-    │   └── style.css
-    └── background.ts           # 消息路由 & API 调用
+├── apps/extension/             # Chrome 插件 (Plasmo)
+│   ├── contents/
+│   │   └── xiaohongshu.ts      # 小红书 content script
+│   ├── sidepanel/
+│   │   ├── index.tsx           # 侧边栏 UI（虚拟列表）
+│   │   └── style.css
+│   ├── auth/
+│   │   ├── Login.tsx           # 登录组件（备用，供后续插件内登录）
+│   │   └── Register.tsx        # 注册组件（备用）
+│   └── background.ts           # 消息路由 & API 调用
+│
+└── docs/                       # 文档
 ```
 
 ---
@@ -97,8 +93,9 @@ comment_copilot/
 
 ### 环境要求
 
+- Go 1.21+
 - Node.js 18+
-- npm 9+
+- pnpm
 
 ### 1. 克隆项目
 
@@ -107,31 +104,34 @@ git clone https://github.com/mustcanbedo/comment_copilot.git
 cd comment_copilot
 ```
 
-### 2. 启动 Web 后端
+### 2. 启动 Go 后端
 
 ```bash
-cd web
-npm install
-# 或从仓库根目录：npm run dev:web
+cd backend
 
-# 复制环境变量模板
-cp .env.local.example .env.local
-# 填写 DATABASE_URL、DEEPSEEK_API_KEY、AUTH_SECRET
+# 复制配置模板并填写
+cp config.yaml.example config.yaml
+# 修改 config.yaml：填写 database_url、deepseek_api_key、auth_secret
 
-# 执行数据库迁移
-npx dotenv-cli -e .env.local -- npx drizzle-kit migrate
+# 设置国内 Go 镜像（中国大陆）
+go env -w GOPROXY=https://goproxy.cn,direct
+go env -w GONOSUMDB='*'
 
-# 启动开发服务器
-npm run dev
-# → http://localhost:3000
+# 启动
+go run ./cmd/server
+# → Go backend running at http://localhost:3000/api
 ```
 
 ### 3. 启动 Chrome 插件
 
 ```bash
 cd apps/extension
-npm install
-npm run dev
+pnpm install
+
+# macOS arm64 需额外修复 sharp
+npm install --platform=darwin --arch=arm64v8 sharp
+
+pnpm dev
 # → 打开 Chrome → 扩展程序 → 加载已解压 → 选择 .plasmo/chrome-mv3-dev
 ```
 
@@ -143,22 +143,16 @@ npm run dev
 
 ---
 
-## 环境变量
+## 配置说明
 
-### web/.env.local
+### backend/config.yaml
 
-```env
-# Neon DB 连接串
-DATABASE_URL=postgresql://...
-
-# DeepSeek API Key
-DEEPSEEK_API_KEY=sk-...
-
-# NextAuth 密钥（openssl rand -base64 32）
-AUTH_SECRET=...
-
-# 插件 API 地址
-NEXT_PUBLIC_API_URL=http://localhost:3000/api
+```yaml
+port: "3000"
+database_url: "postgresql://user:pass@host:port/dbname"
+deepseek_api_key: "sk-..."
+auth_secret: "your-secret-key"
+auto_migrate: true   # 首次启动设为 true，自动建表
 ```
 
 ### apps/extension/.env.development
@@ -169,50 +163,25 @@ PLASMO_PUBLIC_API_URL=http://localhost:3000/api
 
 ---
 
-## 数据库命令
-
-```bash
-cd web
-
-# 生成迁移文件
-npx dotenv-cli -e .env.local -- npx drizzle-kit generate
-
-# 执行迁移
-npx dotenv-cli -e .env.local -- npx drizzle-kit migrate
-
-# 打开 Drizzle Studio（可视化查看数据）
-npx dotenv-cli -e .env.local -- npx drizzle-kit studio
-```
-
----
-
 ## 部署
 
-### Web（Vercel）
+### 后端
 
 ```bash
-cd web
-vercel --prod
+cd backend
+go build -o server ./cmd/server
+./server
 ```
-
-环境变量在 Vercel 控制台 → Settings → Environment Variables 中配置。
 
 ### 插件打包
 
 ```bash
 cd apps/extension
-npm run build
+pnpm build
 # → build/chrome-mv3-prod 目录，上传至 Chrome Web Store
 ```
 
----
-
-## 使用逻辑（插件为主、Web 为数据分析）
-
-- **博主日常**：用 Chrome 插件在小红书笔记页看评论、生成 AI 回复、一键填入并手动发送。
-- **Web 后台**：注册/登录、设置人设、偶尔打开 Dashboard 做一段时间后的数据分析。
-- **当前**：Web 登录与插件未打通，需在 Web 获取 Tenant ID 并在插件中绑定后，插件数据才归属该账号。  
-  完整动线见 **[docs/usage-flow.md](docs/usage-flow.md)**。
+详见 [docs/extension-packaging.md](docs/extension-packaging.md)。
 
 ---
 
@@ -220,7 +189,7 @@ npm run build
 
 | Phase | 状态 | 内容 |
 |-------|------|------|
-| Phase 1：极简 MVP | ✅ 完成 | 评论采集、AI 回复、侧边栏、Web 控制台、用户认证、Vercel 部署 |
+| Phase 1：极简 MVP | ✅ 完成 | 评论采集、AI 回复、侧边栏、Go 后端、用户认证 |
 | Phase 2：产品化 | 🚧 进行中 | Lead Scanner、意向识别、抖音支持、Stripe 付费 |
 | Phase 3：数据驱动 | 📋 规划中 | DM 脚本、爆款分析、多账号管理、数据报表 |
 
