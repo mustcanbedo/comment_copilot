@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:backend": "cd backend-go && go run ./cmd/server",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

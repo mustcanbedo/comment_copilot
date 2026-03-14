@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { proxyToGo } from '@/lib/backend-proxy'
 
-export async function GET(req: NextRequest) {
-  return proxyToGo(req, '/api/health')
+export async function POST(req: NextRequest) {
+  return proxyToGo(req, '/api/auth/login')
 }
+

@@ -1,0 +1,5 @@
+port: "3001"
+database_url: "postgresql://"
+deepseek_api_key: "sk-xxxx"
+auth_secret: "change-me-in-production"
+auto_migrate: false

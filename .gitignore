@@ -12,3 +12,6 @@ pnpm-lock.yaml
 .next/
 .plasmo/
 *.pem
+.tools/
+.npm-cache/
+config.yaml

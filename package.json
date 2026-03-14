@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "dev:extension": "cd apps/extension && pnpm dev",
-    "dev:api": "cd services/api && pnpm start:dev"
+    "dev:api": "cd services/api && pnpm start:dev",
+    "dev:api-go": "cd services/api-go && go run ./cmd/server",
+    "dev:web-backend": "cd web/backend-go && go run ./cmd/server"
   },
   "workspaces": [
     "apps/*",
