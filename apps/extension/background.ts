@@ -46,8 +46,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "SCROLL_TO_COMMENT") {
-    // 广播给侧边栏
     chrome.runtime.sendMessage({ type: "SCROLL_TO_COMMENT", payload: message.payload }).catch(() => {})
+    sendResponse({ ok: true })
+  }
+
+  if (message.type === "URL_CHANGED") {
+    chrome.runtime.sendMessage({ type: "URL_CHANGED", payload: message.payload }).catch(() => {})
     sendResponse({ ok: true })
   }
 

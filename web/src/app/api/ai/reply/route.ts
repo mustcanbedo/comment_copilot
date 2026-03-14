@@ -33,7 +33,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'invalid payload' }, { status: 400 })
   }
 
-  // 读取租户人设配置
   const [tenant] = await db
     .select({ persona: tenants.persona, defaultModel: tenants.defaultModel })
     .from(tenants)
@@ -95,13 +94,11 @@ export async function POST(req: NextRequest) {
     const parsed = JSON.parse(data.choices[0].message.content) as { suggestions: string[] }
     const latencyMs = Date.now() - startMs
 
-    // 估算成本（DeepSeek-V3：$0.27/1M input, $1.10/1M output）
     const costUsd = (
       (data.usage.prompt_tokens * 0.00000027) +
       (data.usage.completion_tokens * 0.0000011)
     ).toFixed(6)
 
-    // 写入 ai_replies
     await db.insert(aiReplies).values({
       tenantId,
       commentId,
@@ -112,13 +109,11 @@ export async function POST(req: NextRequest) {
       costUsd,
     })
 
-    // 更新评论状态
     await db
       .update(comments)
       .set({ status: 'replied' })
       .where(eq(comments.id, commentId))
 
-    // 写入调用日志
     await db.insert(aiCallLogs).values({
       tenantId,
       model,

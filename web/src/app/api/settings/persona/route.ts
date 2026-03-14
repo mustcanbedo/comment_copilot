@@ -19,7 +19,6 @@ export async function POST(req: NextRequest) {
 
   let persona = keywords as string
 
-  // 用 AI 根据关键词生成完整人设
   if (autoGenerate && keywords) {
     try {
       const res = await fetch('https://api.deepseek.com/chat/completions', {

@@ -26,10 +26,12 @@ export async function GET(req: NextRequest) {
   const rows = await db
     .select()
     .from(comments)
-    .where(and(
-      eq(comments.tenantId, tenantId),
-      ne(comments.isAuthorReply, true),
-    ))
+    .where(
+      and(
+        eq(comments.tenantId, tenantId),
+        ne(comments.isAuthorReply, true),
+      )
+    )
     .orderBy(asc(comments.createdAt))
     .limit(limit)
 

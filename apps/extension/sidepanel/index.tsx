@@ -32,6 +32,7 @@ const intentConfig: Record<string, { emoji: string; label: string }> = {
 export default function SidePanel() {
   const [comments, setComments] = useState<Comment[]>([])
   const [loading, setLoading] = useState(false)
+  const [switching, setSwitching] = useState(false)
   const [aiStates, setAiStates] = useState<Record<string, AiState>>({})
   const [filter, setFilter] = useState<"all" | "pending" | "hot">("all")
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -60,7 +61,14 @@ export default function SidePanel() {
   // 监听来自 content script 的消息
   useEffect(() => {
     const handler = (msg: { type: string; payload?: { platformCommentId: string } }) => {
+      if (msg.type === "URL_CHANGED") {
+        // 切换帖子：立刻清空，等新评论进来
+        setComments([])
+        setAiStates({})
+        setSwitching(true)
+      }
       if (msg.type === "COMMENTS_UPDATED") {
+        setSwitching(false)
         fetchComments()
       }
       if (msg.type === "SCROLL_TO_COMMENT" && msg.payload?.platformCommentId) {
@@ -179,8 +187,17 @@ export default function SidePanel() {
       {/* 评论列表 */}
       {!loading && comments.length === 0 && (
         <div className="empty">
-          <p>暂无评论</p>
-          <p className="hint">打开小红书笔记页面，评论会自动同步</p>
+          {switching ? (
+            <>
+              <p>正在同步新帖子评论…</p>
+              <p className="hint">请稍候</p>
+            </>
+          ) : (
+            <>
+              <p>暂无评论</p>
+              <p className="hint">打开小红书笔记页面，评论会自动同步</p>
+            </>
+          )}
         </div>
       )}
 

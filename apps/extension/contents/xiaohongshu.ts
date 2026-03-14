@@ -127,6 +127,11 @@ function onUrlChange() {
   if (location.href === currentUrl) return
   currentUrl = location.href
   seenIds.clear()
+  // 通知侧边栏：URL 已变化，清空并等待新评论
+  chrome.runtime.sendMessage({
+    type: "URL_CHANGED",
+    payload: { url: currentUrl },
+  }).catch(() => {})
   setTimeout(() => {
     initialScan()
     setTimeout(setupScrollSync, 1000)
