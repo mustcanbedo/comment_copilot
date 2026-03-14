@@ -70,6 +70,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     return true
   }
+
+  if (message.type === "GET_ALL_PAGE_COMMENTS") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: "GET_ALL_PAGE_COMMENTS" }, (comments) => {
+          sendResponse(Array.isArray(comments) ? comments : [])
+        })
+      } else {
+        sendResponse([])
+      }
+    })
+    return true
+  }
 })
 
 async function handleCommentsCollected(payload: {

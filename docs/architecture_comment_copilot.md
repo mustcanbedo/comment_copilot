@@ -1,54 +1,67 @@
 # Comment Copilot - 技术架构文档
 
-> 目标：以最小的基础设施负担，快速验证"评论采集 → AI 回复建议 → 潜客转化"核心价值链路。单人开发，优先选择托管服务，消除运维负担。
+> 目标：以最小的基础设施负担，快速验证「评论采集 → AI 回复建议 → 潜客转化」核心价值链路。优先选择托管服务，消除运维负担。
 
-最后更新：2026-03-12（v2.0 Serverless 版）
+最后更新：2026-03-13（v2.0 Serverless 版）
+
+- **已实现架构**（接口、目录、数据流）：见 [architecture-as-built.md](architecture-as-built.md)。
+- **使用逻辑**（插件为主、Web 为数据分析、身份打通）：见 [usage-flow.md](usage-flow.md)。
 
 ---
 
 ## 1. 系统总览
 
-### 1.1 整体架构
+### 1.1 整体架构（当前实现 + 规划）
+
+**当前已实现**：Chrome 插件 + Next.js（Vercel）+ Neon DB；无独立后端服务、无 Redis、无 Inngest。
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                   Chrome Extension (Plasmo)              │
 │  content script (MutationObserver DOM 解析)              │
-│  background script (消息路由 + API 调用)                  │
-│  sidepanel (React UI：评论列表 + AI 回复建议)              │
+│  background script (消息路由 + API 调用 + 速率限制)       │
+│  sidepanel (评论列表 + AI 回复建议 + 填入输入框 + 滚动联动) │
 └────────────────────┬────────────────────────────────────┘
                      │ HTTPS
 ┌────────────────────▼────────────────────────────────────┐
-│              Next.js App (Vercel 部署)                   │
-│  app/api/ingest/comments  → 写入 Neon DB                 │
-│  app/api/ai/reply         → 调用 DeepSeek-V3             │
-│  app/api/inngest          → Inngest 函数入口              │
-│  app/(dashboard)          → Web 控制台 (React UI)        │
+│              Next.js App (Vercel 部署) — web/             │
+│  app/api/ingest/comments  → 评论入库                      │
+│  app/api/ai/reply         → DeepSeek-V3 生成回复          │
+│  app/api/comments         → 评论列表查询                  │
+│  app/api/selectors        → DOM 选择器热更新              │
+│  app/api/auth/*           → NextAuth 登录/注册            │
+│  app/api/settings/persona → 人设读写                     │
+│  app/(dashboard|settings) → Web 控制台 / 设置（数据分析）   │
 └────────────────────┬────────────────────────────────────┘
                      │
-        ┌────────────┴────────────┐
-        ▼                         ▼
-┌───────────────┐        ┌────────────────┐
-│  Neon DB      │        │  Inngest       │
-│  (Serverless  │        │  (后台任务队列) │
-│   PostgreSQL) │        │  - AI 批处理   │
-│  Drizzle ORM  │        │  - SLA 定时器  │
-└───────────────┘        └────────────────┘
+                     ▼
+┌───────────────┐
+│  Neon DB      │     （规划中：Inngest 后台任务、Upstash Redis 缓存）
+│  Serverless   │
+│  PostgreSQL   │
+│  Drizzle ORM  │
+└───────────────┘
 ```
 
 关键决策：
-- **单体 Next.js 应用**：API Routes + Web 控制台合并在同一项目，无需独立后端服务。
-- **Vercel 部署**：Git 推送即部署，自动 SSL、CDN、环境变量管理，零运维。
-- **Neon DB**：Serverless PostgreSQL，按需付费，自动扩展，月费可低至 $0。
-- **Inngest**：基于 HTTP 的无服务器任务队列，替代 BullMQ + Redis，无需管理消息队列。
+- **单体 Next.js 应用**：API + Web 控制台均在 `web/`，无独立后端服务。
+- **Vercel 部署**：自动 SSL、CDN、环境变量，零运维。
+- **Neon DB**：Serverless PostgreSQL，Drizzle ORM。
+- **Inngest / Redis**：规划中（意向评分、SLA 提醒、回复缓存等），当前未接入。
 
 ### 1.2 环境
 
 | 环境 | 说明 | 部署方式 |
 |---|---|---|
-| `local` | 本地开发，`next dev` + Inngest Dev Server | 本地运行 |
-| `preview` | PR 预览，Vercel Preview Deployment | Git Push 自动触发 |
+| `local` | 本地开发，`web`: `next dev`；插件: `apps/extension` 下 `npm run dev` | 本地运行 |
+| `preview` | PR 预览 | Vercel Preview Deployment |
 | `production` | 正式环境 | Vercel Production |
+
+### 1.3 产品使用定位
+
+- **博主日常**：以 **Chrome 插件** 为主——在小红书笔记页用侧边栏看评论、生成 AI 回复、一键填入输入框并手动发送。
+- **Web 后台**：用于注册/登录、设置人设、**阶段性数据分析**（Dashboard 查看评论与统计），非主操作界面。
+- 详细动线与 Web/插件身份关系见 [usage-flow.md](usage-flow.md)。
 
 ---
 
@@ -58,9 +71,9 @@
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| Content Script | `contents/xiaohongshu.ts` | DOM 解析、MutationObserver 监听、数据提取 |
-| Background Script | `background.ts` | 消息路由、API 调用、速率限制、断路器 |
-| Side Panel | `sidepanel/index.tsx` | 评论列表展示、AI 回复建议、一键复制 |
+| Content Script | `contents/xiaohongshu.ts` | DOM 解析、MutationObserver、URL 变化监听、数据提取、点击回复填入输入框 |
+| Background Script | `background.ts` | 消息路由、API 调用、速率限制、断路器、转发 FILL_REPLY / SCROLL_TO_COMMENT |
+| Side Panel | `sidepanel/index.tsx` | 评论列表、AI 回复建议、点击回复填入小红书输入框、与页面滚动联动 |
 
 ### 2.2 数据采集合规设计
 
@@ -102,27 +115,30 @@
 
 ## 3. Next.js API 设计
 
-### 3.1 核心接口
+### 3.1 核心接口（已实现）
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
-| `/api/ingest/comments` | POST | 接收插件上报的评论批次，写入 DB |
-| `/api/ai/reply` | POST | 接收评论内容，调用 DeepSeek-V3，返回 3 条建议 |
-| `/api/comments` | GET | 查询当前 tenant 的评论列表 |
-| `/api/selectors` | GET | 返回指定平台的 DOM selector 配置 |
-| `/api/inngest` | POST | Inngest 函数入口（webhook） |
+| `/api/ingest/comments` | POST | 接收插件上报的评论批次，去重写入 DB |
+| `/api/ai/reply` | POST | 按 tenant 人设调用 DeepSeek-V3，返回 3 条建议，写 ai_replies / ai_call_logs |
+| `/api/comments` | GET | 按 tenant 查询评论列表（可扩展按 postUrl 过滤当前帖子） |
+| `/api/selectors` | GET | 返回指定平台的 DOM selector 配置（DB 或默认） |
+| `/api/auth/[...nextauth]` | GET/POST | NextAuth 登录/会话 |
+| `/api/auth/register` | POST | 用户注册（创建 tenant + user） |
+| `/api/settings/persona` | GET/POST | 人设读取/保存（需 Session） |
 | `/api/health` | GET | 健康检查 |
+| `/api/inngest` | POST | **规划中**：Inngest 函数入口 |
 
-### 3.2 认证
+### 3.2 认证（当前）
 
-- MVP 阶段：`x-tenant-id` Header（简单占位）。
-- M1 阶段：NextAuth.js（邮箱 + Google OAuth），JWT Session。
-- API Key 鉴权（Agency 套餐对外 API）。
+- **Web**：NextAuth.js（邮箱 + 密码），Session 中带 `tenantId`；Dashboard / 设置需登录。
+- **插件**：请求头 `x-tenant-id`，从插件 storage 或默认值读取；与 Web 登录态不互通，需用户在 Web 获取 Tenant ID 后到插件内绑定。详见 [usage-flow.md](usage-flow.md)。
+- **规划**：M1 插件与 Web 身份打通（如插件内登录跳转 Web、或 API Key 绑定）。
 
 ### 3.3 多租户
 
-- 所有数据库查询强制携带 `tenant_id` 过滤条件。
-- MVP 阶段每个用户即一个 tenant，无需复杂 RBAC。
+- 所有业务数据按 `tenant_id` 隔离。
+- 当前：每用户一 tenant；Web 端 Session 对应 tenant，插件端依赖绑定的 Tenant ID。
 
 ---
 
@@ -150,34 +166,31 @@ POST /api/ai/reply
 | 评论回复生成（多语言） | GPT-4o | DeepSeek-V3 |
 | 私信脚本生成 | GPT-4o long-form | 预置 SOP |
 
-### 4.3 后台异步任务（Inngest）
+### 4.3 后台异步任务（规划中：Inngest）
 
-Inngest 函数通过 HTTP Webhook 触发，Vercel 自动处理重试和超时：
+当前未接入 Inngest。规划中通过 HTTP Webhook 触发，例如：
 
 ```typescript
-// 示例：批量意向评分
+// 示例：批量意向评分（M1）
 export const scoreIntentFn = inngest.createFunction(
   { id: 'score-intent', retries: 3 },
   { event: 'comment/ingested' },
   async ({ event, step }) => {
     const { tenantId, commentIds } = event.data
-    // 批量调用 DeepSeek 意向识别
-    // 写回 comments.intent_level
+    // 批量调用 DeepSeek 意向识别，写回 comments.intent_level
   }
 )
 ```
 
-当前 Inngest 函数：
+规划中的 Inngest 函数：
 - `comment/ingested`：新评论入库后触发意向评分（M1）
 - `sla/check`：定时检查未处理的 hot 评论，发送提醒（M1）
 - `report/weekly`：每周生成报表（M2）
 
 ### 4.4 成本控制
 
-- 默认使用 DeepSeek-V3（约 $0.001/1k tokens，比 GPT-4o 便宜 10x）。
-- `ai_call_logs` 表记录每次调用的 token 消耗和成本。
-- 当 tenant 当日成本超过阈值时，自动切换到更便宜的模型并发送邮件告警。
-- Prompt 缓存：相同评论内容 + 相同人设 → 直接返回缓存结果（Redis/Upstash，M1 引入）。
+- **已实现**：默认 DeepSeek-V3；`ai_call_logs` 表记录每次调用的 token 与成本。
+- **规划**：tenant 日成本超阈值时降级模型 + 邮件告警；Prompt 缓存（Redis/Upstash，M1）。
 
 ---
 
@@ -189,11 +202,10 @@ export const scoreIntentFn = inngest.createFunction(
 - ORM：Drizzle ORM（类型安全，SQL-like 语法，AI 友好）。
 - 连接池：Neon 内置连接池，无需 PgBouncer。
 
-### 5.2 缓存策略（MVP 阶段）
+### 5.2 缓存策略
 
-- 人设配置：Next.js `unstable_cache` 缓存 5 分钟。
-- Selector 配置：`chrome.storage.local` 缓存 1 小时。
-- M1 引入 Upstash Redis 用于 AI 回复缓存和速率限制。
+- **当前**：Selector 配置可由插件侧缓存（如 1 小时）；人设每次请求从 DB 读取。
+- **规划**：人设 `unstable_cache` 或短期缓存；M1 引入 Upstash Redis 用于 AI 回复缓存与速率限制。
 
 ---
 
@@ -228,11 +240,12 @@ export const scoreIntentFn = inngest.createFunction(
 
 | 阶段 | 当前（MVP） | M1（产品化） | M2（规模化） |
 |---|---|---|---|
-| 后端 | Next.js Route Handlers | 同左 | 可拆分为独立 NestJS 服务 |
-| 数据库 | Neon DB 单表 | 同左 + 索引优化 | 按需引入分区 |
-| 任务队列 | Inngest | 同左 | 评估 NATS JetStream |
-| 缓存 | Next.js cache | Upstash Redis | Redis Cluster |
+| 后端 | Next.js Route Handlers（`web/`） | 同左 | 可拆分为独立服务 |
+| 数据库 | Neon DB + Drizzle | 同左 + 索引优化 | 按需引入分区 |
+| 任务队列 | 无 | Inngest | 评估 NATS JetStream |
+| 缓存 | 无 / 插件本地 | Upstash Redis | Redis Cluster |
 | 部署 | Vercel | 同左 | 可迁移至 EKS/GKE |
+| 身份 | Web NextAuth；插件 x-tenant-id（未打通） | 插件与 Web 打通 | API Key / 多端统一 |
 | 实时推送 | 无（轮询） | Supabase Realtime | Socket.IO |
 
 技术债管理：

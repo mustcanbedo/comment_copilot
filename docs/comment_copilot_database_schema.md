@@ -4,7 +4,7 @@
 
 数据库：Neon DB（Serverless PostgreSQL），ORM：Drizzle ORM。
 
-最后更新：2026-03-12（v2.0 MVP 简化版）
+最后更新：2026-03-13（v2.0 MVP 简化版）
 
 ---
 
@@ -96,9 +96,10 @@ export const comments = pgTable('comments', {
   authorId: text('author_id').default(''),
   content: text('content').notNull(),
   postUrl: text('post_url').default(''),
+  isAuthorReply: boolean('is_author_reply').default(false).notNull(), // 是否笔记作者自己的回复，列表过滤用
   intentLevel: text('intent_level').default('cold'), // 'hot' | 'warm' | 'cold' | 'spam'
   intentScore: numeric('intent_score', { precision: 5, scale: 2 }),
-  status: text('status').default('pending').notNull(), // 'pending' | 'replied' | 'ignored'
+  status: text('status').default('pending').notNull(), // 'pending' | 'replied' | 'ignored' | 'author'
   commentedAt: timestamp('commented_at').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({

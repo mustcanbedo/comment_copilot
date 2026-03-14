@@ -207,40 +207,93 @@ function waitForElement(selector: string, timeoutMs: number): Promise<Element | 
   })
 }
 
-// 滚动联动：监测哪条评论在视口中央，通知侧边栏高亮
-let scrollObserver: IntersectionObserver | null = null
+// 滚动联动：左侧小红书评论滚动时，找到视口中央那条评论，通知右侧侧边栏同步滚动
+let scrollSyncTick: number | null = null
+let lastSentId: string | null = null
 
-function setupScrollSync() {
-  if (scrollObserver) scrollObserver.disconnect()
-
+function findCommentAtViewportCenter(): string | null {
   const nodes = Array.from(document.querySelectorAll(SELECTORS.commentList))
-  if (nodes.length === 0) return
+  if (nodes.length === 0) return null
 
-  scrollObserver = new IntersectionObserver((entries) => {
-    // 找交叉比例最大的那条（最居中的评论）
-    const visible = entries
-      .filter(e => e.isIntersecting)
-      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)
+  const viewportCenter = window.innerHeight / 2
+  let bestId: string | null = null
+  let bestDist = Infinity
 
-    if (visible.length > 0) {
-      const topEntry = visible[0]
-      const commentId = extractCommentId(topEntry.target)
-      chrome.runtime.sendMessage({
-        type: "SCROLL_TO_COMMENT",
-        payload: { platformCommentId: commentId },
-      }).catch(() => {})
+  nodes.forEach((el) => {
+    const rect = el.getBoundingClientRect()
+    const elCenter = rect.top + rect.height / 2
+    const dist = Math.abs(elCenter - viewportCenter)
+    if (dist < bestDist) {
+      bestDist = dist
+      bestId = extractCommentId(el)
     }
-  }, { threshold: [0.3, 0.6, 1.0] })
-
-  nodes.forEach(n => scrollObserver!.observe(n))
+  })
+  return bestId
 }
 
-// 监听来自 background 的填入指令
+function onPageScroll() {
+  if (scrollSyncTick != null) return
+  scrollSyncTick = window.requestAnimationFrame(() => {
+    scrollSyncTick = null
+    const id = findCommentAtViewportCenter()
+    if (id && id !== lastSentId) {
+      lastSentId = id
+      chrome.runtime.sendMessage({
+        type: "SCROLL_TO_COMMENT",
+        payload: { platformCommentId: id },
+      }).catch(() => {})
+    }
+  })
+}
+
+function getScrollParent(el: Element): Element | typeof window {
+  let p: Element | null = el.parentElement
+  while (p) {
+    const style = getComputedStyle(p)
+    const overflow = style.overflowY
+    if (overflow === "auto" || overflow === "scroll" || overflow === "overlay") return p
+    p = p.parentElement
+  }
+  return window
+}
+
+let scrollTarget: Element | typeof window | null = null
+
+function setupScrollSync() {
+  lastSentId = null
+  if (scrollTarget) {
+    scrollTarget.removeEventListener("scroll", onPageScroll, true)
+    scrollTarget = null
+  }
+  const firstComment = document.querySelector(SELECTORS.commentList)
+  if (!firstComment) return
+  scrollTarget = getScrollParent(firstComment)
+  scrollTarget.addEventListener("scroll", onPageScroll, true)
+  // 初始触发一次，让侧边栏对齐当前第一条
+  onPageScroll()
+}
+
+// 返回当前页面全部评论（按 DOM 顺序），包含 platformCommentId/authorName/content
+function getAllPageComments(): ScrapedComment[] {
+  const nodes = document.querySelectorAll(SELECTORS.commentList)
+  const results: ScrapedComment[] = []
+  nodes.forEach((node) => {
+    const c = parseCommentNode(node)
+    if (c) results.push(c)
+  })
+  return results
+}
+
+// 监听来自 background 的填入指令与数据查询
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "FILL_REPLY") {
     const { platformCommentId, text } = message.payload
     fillReply(platformCommentId, text).then(sendResponse)
     return true
+  }
+  if (message.type === "GET_ALL_PAGE_COMMENTS") {
+    sendResponse(getAllPageComments())
+    return false
   }
 })
 

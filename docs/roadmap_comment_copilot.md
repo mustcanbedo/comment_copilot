@@ -2,16 +2,16 @@
 
 > 核心原则：**先验证，再构建**。以最小代价跑通核心价值闭环，用真实用户反馈驱动后续迭代。单人 + AI 开发模式，优先选择零运维的托管服务。
 
-最后更新：2026-03-12（v2.0 单人 MVP 版）
+最后更新：2026-03-13（v2.0 单人 MVP 版）
 
 ---
 
 ## 0. 开发模式
 
-- **单人 + AI 协作**：Cursor AI 辅助编码，每个功能模块维护上下文文档。
-- **节奏**：以"可演示的功能"为交付单位，不以 Sprint 为单位。
-- **验证优先**：每个阶段结束时必须有真实用户使用数据，再决定下一步。
-- **技术栈**：Next.js + Vercel + Neon DB + Drizzle ORM + Inngest + Plasmo。
+- **协作**：Cursor AI 辅助编码，功能模块维护上下文文档；可选多人协作（后端/前端）。
+- **节奏**：以「可演示的功能」为交付单位。
+- **验证优先**：阶段结束用真实用户数据决定下一步。
+- **技术栈**：Next.js（`web/`）+ Vercel + Neon DB + Drizzle ORM + Plasmo；Inngest/Redis 为规划。
 
 ---
 
@@ -46,7 +46,7 @@
 | Plasmo 脚手架 | 初始化插件项目，配置 manifest | `plasmo dev` 正常启动 |
 | 小红书 content script | MutationObserver 监听评论区 DOM 变化 | 能捕获新评论节点 |
 | Background script | 消息路由 + 断路器 + 速率限制 | 评论批量上报到后端 |
-| Sidebar UI | 评论列表 + "生成回复"按钮 + 一键复制 | 完整交互流程可用 |
+| Sidebar UI | 评论列表 + 生成回复 + 点击填入输入框 + 滚动联动 | 完整交互流程可用 |
 | Selector 热更新 | 从 `/api/selectors` 拉取配置 | 修改 DB 后插件自动使用新 selector |
 
 ### Week 3：可用性 + 部署

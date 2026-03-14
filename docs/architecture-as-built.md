@@ -4,6 +4,8 @@
 
 最后更新：2026-03-13
 
+- **使用逻辑与用户动线**（插件为主、Web 为数据分析、两端身份如何打通）见 [usage-flow.md](usage-flow.md)。
+
 ---
 
 ## 1. 系统边界（已实现）
@@ -52,7 +54,7 @@ flowchart LR
 
 ### 2.2 数据库与迁移
 
-- Schema 定义：`web/src/db/schema.ts`（含 `comments.isAuthorReply` 等，与 `comment_copilot_database_schema.md` 对齐）。
+- Schema 定义：`web/src/db/schema.ts`（含 `comments.isAuthorReply` 等，与 [comment_copilot_database_schema.md](comment_copilot_database_schema.md) 对齐）。
 - 连接：`web/src/db/index.ts`（Neon serverless 驱动）。
 - 迁移文件：`web/drizzle/`；执行方式见项目 README（`npx dotenv-cli -e .env.local -- npx drizzle-kit migrate`）。
 
@@ -116,4 +118,4 @@ Sidepanel / Background → POST /api/ai/reply
 
 ## 6. 遗留代码说明
 
-- **`services/api/`（NestJS）**：早期后端，已弃用，当前未接入插件与 Web。新逻辑一律写在 `web/`，请勿在 `services/api` 上继续开发。保留或归档策略见项目 README。
+- 早期 NestJS 后端（原 `services/api/`）已移除，当前仅保留 `web/` 作为后端，新逻辑一律写在 `web/`。

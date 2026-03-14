@@ -28,6 +28,21 @@ Comment Copilot 是一个 Chrome 插件 + Web 控制台的组合产品，帮助�
 
 ---
 
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑：插件为主、Web 为数据分析、身份绑定 |
+| [docs/architecture-as-built.md](docs/architecture-as-built.md) | 已实现技术架构（API、目录、数据流） |
+| [docs/architecture_comment_copilot.md](docs/architecture_comment_copilot.md) | 技术架构与演进（含规划） |
+| [docs/comment_copilot_database_schema.md](docs/comment_copilot_database_schema.md) | 数据库表结构 |
+| [docs/prd_comment_copilot.md](docs/prd_comment_copilot.md) | 产品需求文档 |
+| [docs/roadmap_comment_copilot.md](docs/roadmap_comment_copilot.md) | 开发路线图 |
+| [docs/code-review.md](docs/code-review.md) | 代码审查结论与建议 |
+| [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与在 Windows 上安装 |
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -97,6 +112,7 @@ cd comment_copilot
 ```bash
 cd web
 npm install
+# 或从仓库根目录：npm run dev:web
 
 # 复制环境变量模板
 cp .env.local.example .env.local
@@ -188,6 +204,15 @@ cd apps/extension
 npm run build
 # → build/chrome-mv3-prod 目录，上传至 Chrome Web Store
 ```
+
+---
+
+## 使用逻辑（插件为主、Web 为数据分析）
+
+- **博主日常**：用 Chrome 插件在小红书笔记页看评论、生成 AI 回复、一键填入并手动发送。
+- **Web 后台**：注册/登录、设置人设、偶尔打开 Dashboard 做一段时间后的数据分析。
+- **当前**：Web 登录与插件未打通，需在 Web 获取 Tenant ID 并在插件中绑定后，插件数据才归属该账号。  
+  完整动线见 **[docs/usage-flow.md](docs/usage-flow.md)**。
 
 ---
 
