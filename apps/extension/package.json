@@ -11,7 +11,8 @@
     "@plasmohq/storage": "^1.13.0",
     "plasmo": "^0.86.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.300",
@@ -20,7 +21,14 @@
     "typescript": "^5.7.0"
   },
   "manifest": {
-    "permissions": ["storage", "activeTab", "sidePanel"],
-    "host_permissions": ["https://www.xiaohongshu.com/*", "https://www.douyin.com/*"]
+    "permissions": [
+      "storage",
+      "activeTab",
+      "sidePanel"
+    ],
+    "host_permissions": [
+      "https://www.xiaohongshu.com/*",
+      "https://www.douyin.com/*"
+    ]
   }
 }
