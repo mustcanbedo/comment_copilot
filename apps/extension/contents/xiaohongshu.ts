@@ -31,11 +31,12 @@ function extractCommentId(el: Element): string {
   return (
     el.getAttribute("data-comment-id") ||
     el.getAttribute("data-id") ||
-    el.id ||
-    `xhs_${btoa(
-      (el.querySelector(SELECTORS.authorName) as HTMLElement)?.innerText?.slice(0, 10) +
-      (el.querySelector(SELECTORS.content) as HTMLElement)?.innerText?.slice(0, 20)
-    ).slice(0, 16)}`
+    (el.id || null) ||
+    // 用 encodeURIComponent 再 btoa，支持中文等非 ASCII 字符
+    `xhs_${btoa(encodeURIComponent(
+      ((el.querySelector(SELECTORS.authorName) as HTMLElement)?.innerText?.slice(0, 10) ?? "") +
+      ((el.querySelector(SELECTORS.content) as HTMLElement)?.innerText?.slice(0, 20) ?? "")
+    )).slice(0, 16)}`
   )
 }
 
@@ -258,17 +259,35 @@ function getScrollParent(el: Element): Element | typeof window {
 }
 
 let scrollTarget: Element | typeof window | null = null
+let scrollTargetExtra: Element | null = null   // 可滚动父级（需单独 cleanup）
 
 function setupScrollSync() {
   lastSentId = null
+
+  // cleanup 上一次注册的监听
   if (scrollTarget) {
     scrollTarget.removeEventListener("scroll", onPageScroll, true)
     scrollTarget = null
   }
+  if (scrollTargetExtra) {
+    scrollTargetExtra.removeEventListener("scroll", onPageScroll, true)
+    scrollTargetExtra = null
+  }
+
+  // 始终在捕获阶段监听 window，覆盖所有滚动容器（含 overflow:hidden 的 SPA 容器）
+  window.addEventListener("scroll", onPageScroll, true)
+  scrollTarget = window
+
+  // 同时尝试找到最近的可滚动父级，避免遗漏内部容器滚动
   const firstComment = document.querySelector(SELECTORS.commentList)
-  if (!firstComment) return
-  scrollTarget = getScrollParent(firstComment)
-  scrollTarget.addEventListener("scroll", onPageScroll, true)
+  if (firstComment) {
+    const parent = getScrollParent(firstComment)
+    if (parent !== window) {
+      parent.addEventListener("scroll", onPageScroll, true)
+      scrollTargetExtra = parent as Element
+    }
+  }
+
   // 初始触发一次，让侧边栏对齐当前第一条
   onPageScroll()
 }

@@ -15,7 +15,8 @@ body {
 .panel {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Header */
@@ -133,13 +134,15 @@ body {
 
 .hint { font-size: 11px; color: #ccc; }
 
-/* Comment List */
+/* Comment List — 只显示可见区域，overflow 触发虚拟列表滚动 */
 .comment-list {
   flex: 1;
+  overflow-y: auto;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0; /* flex 子项需要此属性才能正确收缩 */
 }
 
 .comment-card {

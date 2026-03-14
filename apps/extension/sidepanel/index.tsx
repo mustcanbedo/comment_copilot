@@ -1,5 +1,21 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Storage } from "@plasmohq/storage"
 import "./style.css"
+
+// 虚拟列表：每次只渲染可见区域 ± BUFFER 条评论
+const ITEM_ESTIMATED_HEIGHT = 120
+const BUFFER = 5
+
+const storage = new Storage()
+const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const API_BASE = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:3000/api"
+
+const intentConfig: Record<string, { emoji: string; label: string }> = {
+  hot:  { emoji: "🔥", label: "高意向" },
+  warm: { emoji: "✨", label: "中意向" },
+  cold: { emoji: "👀", label: "普通" },
+  spam: { emoji: "🚫", label: "垃圾" },
+}
 
 interface Comment {
   id: string
@@ -12,7 +28,6 @@ interface Comment {
   postUrl: string | null
 }
 
-// content script 直接返回的页面评论（不经过数据库）
 interface PageComment {
   platformCommentId: string
   authorName: string
@@ -28,14 +43,28 @@ interface AiState {
   error?: string
 }
 
-const API_BASE = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:3000/api"
-const TENANT_ID = "00000000-0000-0000-0000-000000000001"
+type Filter = "all" | "pending" | "hot"
 
-const intentConfig: Record<string, { emoji: string; label: string }> = {
-  hot:  { emoji: "🔥", label: "高意向" },
-  warm: { emoji: "✨", label: "中意向" },
-  cold: { emoji: "👀", label: "普通" },
-  spam: { emoji: "🚫", label: "垃圾" },
+function applyFilter(list: Comment[], filter: Filter): Comment[] {
+  if (filter === "hot") return list.filter(c => c.intentLevel === "hot")
+  if (filter === "pending") return list.filter(c => c.status === "pending")
+  return list
+}
+
+function mergeWithDb(pageComments: PageComment[], dbMap: Map<string, Comment>): Comment[] {
+  return pageComments.map((pc) => {
+    const db = dbMap.get(pc.platformCommentId)
+    return {
+      id: db?.id ?? pc.platformCommentId,
+      platformCommentId: pc.platformCommentId,
+      authorName: pc.authorName,
+      content: pc.content,
+      commentedAt: pc.commentedAt,
+      postUrl: pc.postUrl,
+      status: db?.status ?? "pending",
+      intentLevel: db?.intentLevel ?? null,
+    }
+  })
 }
 
 export default function SidePanel() {
@@ -43,168 +72,163 @@ export default function SidePanel() {
   const [loading, setLoading] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [aiStates, setAiStates] = useState<Record<string, AiState>>({})
-  const [filter, setFilter] = useState<"all" | "pending" | "hot">("all")
+  const [filter, setFilter] = useState<Filter>("all")
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 })
+
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  // 数据库里的补充信息（status、intentLevel、id），按 platformCommentId 索引
+  const listContainerRef = useRef<HTMLDivElement | null>(null)
+  const itemHeightsRef = useRef<Record<string, number>>({})
   const dbInfoRef = useRef<Map<string, Comment>>(new Map())
 
-  async function fetchComments() {
+  // ─── 虚拟列表偏移计算（useMemo，不在渲染时全量遍历）─────────────────────
+  const { topHeight, bottomHeight } = useMemo(() => {
+    let top = 0
+    let bottom = 0
+    for (let i = 0; i < comments.length; i++) {
+      const h = itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+      if (i < visibleRange.start) top += h
+      else if (i >= visibleRange.end) bottom += h
+    }
+    return { topHeight: top, bottomHeight: bottom }
+  }, [comments, visibleRange])
+
+  // ─── 更新可见范围 ────────────────────────────────────────────────────────
+  const updateVisibleRange = useCallback(() => {
+    const container = listContainerRef.current
+    if (!container) return
+    const { scrollTop, clientHeight } = container
+    let offset = 0
+    let start = 0
+    let end = comments.length
+
+    for (let i = 0; i < comments.length; i++) {
+      const h = itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+      if (offset + h < scrollTop) { offset += h; start = i + 1 }
+      else break
+    }
+    offset = 0
+    for (let i = 0; i < comments.length; i++) {
+      offset += itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+      if (offset > scrollTop + clientHeight) { end = i + 1; break }
+    }
+    setVisibleRange({
+      start: Math.max(0, start - BUFFER),
+      end: Math.min(comments.length, end + BUFFER),
+    })
+  }, [comments])
+
+  useEffect(() => {
+    updateVisibleRange()
+    const container = listContainerRef.current
+    if (!container) return
+    container.addEventListener("scroll", updateVisibleRange, { passive: true })
+    return () => container.removeEventListener("scroll", updateVisibleRange)
+  }, [comments, updateVisibleRange])
+
+  // ─── 拉取评论（页面主导 + DB 补充）───────────────────────────────────────
+  const fetchComments = useCallback(async () => {
     setLoading(true)
     try {
-      // 1. 先从 content script 拿当前页全量评论（顺序和小红书一致）
+      const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+
+      // 1. 从 content script 拿页面全量评论（顺序与小红书一致）
       let pageComments: PageComment[] = []
       try {
         const result = await chrome.runtime.sendMessage({ type: "GET_ALL_PAGE_COMMENTS" })
-        if (Array.isArray(result) && result.length > 0) {
-          pageComments = result as PageComment[]
-        }
-      } catch {
-        // content 未注入（非小红书页）时忽略
-      }
+        if (Array.isArray(result) && result.length > 0) pageComments = result
+      } catch { /* 非小红书页忽略 */ }
 
-      // 2. 同时拉数据库里的状态/intentLevel 等补充信息（不限条数）
+      // 2. 拉 DB 补充信息（status / intentLevel / UUID）
       try {
-        let postUrl: string | undefined
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
         const url = tab?.url ?? ""
-        if (url && (url.includes("xiaohongshu.com") || url.includes("douyin.com"))) {
-          postUrl = url
+        const params = new URLSearchParams()
+        if (url.includes("xiaohongshu.com") || url.includes("douyin.com")) {
+          params.set("postUrl", url)
         }
-        const params = new URLSearchParams({ limit: "1000" })
-        if (postUrl) params.set("postUrl", postUrl)
         const res = await fetch(`${API_BASE}/comments?${params}`, {
-          headers: { "x-tenant-id": TENANT_ID },
+          headers: { "x-tenant-id": tenantId },
         })
         const data = await res.json()
-        const dbList: Comment[] = data.data || []
         const map = new Map<string, Comment>()
-        dbList.forEach((c) => map.set(c.platformCommentId, c))
+        ;(data.data as Comment[] || []).forEach(c => map.set(c.platformCommentId, c))
         dbInfoRef.current = map
-      } catch {
-        // 数据库拉取失败时继续用页面数据
-      }
+      } catch { /* DB 失败时用页面数据兜底 */ }
 
-      if (pageComments.length > 0) {
-        // 3. 用页面评论作为主列表（顺序、数量与小红书完全一致），补充数据库里的 id/status/intentLevel
-        const merged: Comment[] = pageComments.map((pc) => {
-          const db = dbInfoRef.current.get(pc.platformCommentId)
-          return {
-            id: db?.id ?? pc.platformCommentId,             // 数据库 UUID，没入库时用 platformCommentId 代替
-            platformCommentId: pc.platformCommentId,
-            authorName: pc.authorName,
-            content: pc.content,
-            commentedAt: pc.commentedAt,
-            postUrl: pc.postUrl,
-            status: db?.status ?? "pending",
-            intentLevel: db?.intentLevel ?? null,
-          }
-        })
+      // 3. 合并并过滤
+      const list = pageComments.length > 0
+        ? applyFilter(mergeWithDb(pageComments, dbInfoRef.current), filter)
+        : applyFilter(Array.from(dbInfoRef.current.values()), filter)
 
-        // 筛选
-        const filtered = merged.filter((c) => {
-          if (filter === "hot") return c.intentLevel === "hot"
-          if (filter === "pending") return c.status === "pending"
-          return true
-        })
-        setComments(filtered)
-      } else {
-        // 4. 没有页面数据时（非小红书页或未加载），直接用数据库列表兜底
-        const fallback = Array.from(dbInfoRef.current.values()).filter((c) => {
-          if (filter === "hot") return c.intentLevel === "hot"
-          if (filter === "pending") return c.status === "pending"
-          return true
-        })
-        setComments(fallback)
-      }
+      setComments(list)
+      setVisibleRange({ start: 0, end: 20 })  // 重置虚拟列表到顶部
     } catch (e) {
       console.error(e)
     } finally {
       setLoading(false)
     }
-  }
+  }, [filter])
 
-  useEffect(() => { fetchComments() }, [filter])
+  useEffect(() => { fetchComments() }, [fetchComments])
 
-  // 静默刷新：从 content 拿最新页面评论，合并数据库信息后更新列表，不显示 loading
-  async function silentRefresh() {
-    try {
-      const result = await chrome.runtime.sendMessage({ type: "GET_ALL_PAGE_COMMENTS" })
-      if (!Array.isArray(result) || result.length === 0) return
-      const pageComments = result as PageComment[]
-      const merged: Comment[] = pageComments.map((pc) => {
-        const db = dbInfoRef.current.get(pc.platformCommentId)
-        return {
-          id: db?.id ?? pc.platformCommentId,
-          platformCommentId: pc.platformCommentId,
-          authorName: pc.authorName,
-          content: pc.content,
-          commentedAt: pc.commentedAt,
-          postUrl: pc.postUrl,
-          status: db?.status ?? "pending",
-          intentLevel: db?.intentLevel ?? null,
-        }
-      })
-      setComments(prev => {
-        // 只在条数或内容确实有变化时才更新，避免无谓 re-render
-        if (merged.length === prev.length &&
-            merged.every((c, i) => c.platformCommentId === prev[i]?.platformCommentId)) {
-          return prev
-        }
-        return merged.filter((c) => {
-          if (filter === "hot") return c.intentLevel === "hot"
-          if (filter === "pending") return c.status === "pending"
-          return true
-        })
-      })
-    } catch {
-      // content 未注入时忽略
-    }
-  }
-
-  // 监听来自 content script 的消息
+  // ─── 消息监听 ────────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (msg: { type: string; payload?: { platformCommentId: string } }) => {
       if (msg.type === "URL_CHANGED") {
-        // 切换帖子：立刻清空，等新评论进来
         setComments([])
         setAiStates({})
         dbInfoRef.current = new Map()
+        itemHeightsRef.current = {}
+        setVisibleRange({ start: 0, end: 20 })
         setSwitching(true)
       }
+
       if (msg.type === "COMMENTS_UPDATED") {
-        // 有新评论入库：更新 dbInfoRef 后静默刷新列表
         setSwitching(false)
-        const pid = (msg as { type: string; payload?: { platformCommentId?: string } }).payload?.platformCommentId
-        void pid // 暂不使用，静默全量刷新即可
-        silentRefresh()
+        fetchComments()
       }
+
       if (msg.type === "SCROLL_TO_COMMENT" && msg.payload?.platformCommentId) {
         const pid = msg.payload.platformCommentId
-        // 先静默同步最新评论（滚动加载可能有新增），再定位
-        silentRefresh().then(() => {
-          setComments(prev => {
-            const match = prev.find(c => c.platformCommentId === pid)
-            if (match) {
-              const id = match.id
-              requestAnimationFrame(() => {
-                cardRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "center" })
+        // 只做定位，不触发 silentRefresh（高频调用时 silentRefresh 开销太大）
+        setComments(prev => {
+          const idx = prev.findIndex(c => c.platformCommentId === pid)
+          if (idx === -1) return prev
+
+          // 先把目标 index 带入可见范围
+          setVisibleRange({
+            start: Math.max(0, idx - BUFFER),
+            end: Math.min(prev.length, idx + BUFFER + 1),
+          })
+
+          const id = prev[idx].id
+          // 等虚拟列表渲染完再滚动
+          requestAnimationFrame(() => {
+            const card = cardRefs.current[id]
+            const container = listContainerRef.current
+            if (card && container) {
+              // 用 getBoundingClientRect 计算相对容器的准确位置
+              const cardRect = card.getBoundingClientRect()
+              const containerRect = container.getBoundingClientRect()
+              const scrollOffset = cardRect.top - containerRect.top + container.scrollTop
+              container.scrollTo({
+                top: scrollOffset - (container.clientHeight - card.offsetHeight) / 2,
+                behavior: "smooth",
               })
             }
-            return prev
           })
+          return prev
         })
       }
     }
+
     chrome.runtime.onMessage.addListener(handler)
     return () => chrome.runtime.onMessage.removeListener(handler)
-  }, [filter])
+  }, [fetchComments])
 
+  // ─── AI 回复 ─────────────────────────────────────────────────────────────
   async function generateReply(comment: Comment) {
-    setAiStates(prev => ({
-      ...prev,
-      [comment.id]: { loading: true, suggestions: [], copied: null },
-    }))
-
+    setAiStates(prev => ({ ...prev, [comment.id]: { loading: true, suggestions: [], copied: null } }))
     try {
       const result = await chrome.runtime.sendMessage({
         type: "GET_AI_REPLY",
@@ -220,44 +244,36 @@ export default function SidePanel() {
         },
       }))
     } catch {
-      setAiStates(prev => ({
-        ...prev,
-        [comment.id]: { loading: false, suggestions: [], copied: null, error: "请求失败" },
-      }))
+      setAiStates(prev => ({ ...prev, [comment.id]: { loading: false, suggestions: [], copied: null, error: "请求失败" } }))
     }
   }
 
   async function fillReply(comment: Comment, text: string, index: number) {
-    setAiStates(prev => ({
-      ...prev,
-      [comment.id]: { ...prev[comment.id], copied: index },
-    }))
-
+    setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: index } }))
     try {
       const res = await chrome.runtime.sendMessage({
         type: "FILL_REPLY",
         payload: { platformCommentId: comment.platformCommentId, text },
       })
-
       if (!res?.ok) {
-        // 填入失败时降级为复制到剪贴板
         await navigator.clipboard.writeText(text)
         console.warn("[CommentCopilot] fillReply fallback to clipboard:", res?.error)
       }
     } catch {
       await navigator.clipboard.writeText(text)
     }
-
     setTimeout(() => {
-      setAiStates(prev => ({
-        ...prev,
-        [comment.id]: { ...prev[comment.id], copied: null },
-      }))
+      setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: null } }))
     }, 2000)
   }
 
-  const pendingCount = comments.filter(c => c.status === "pending").length
-  const hotCount = comments.filter(c => c.intentLevel === "hot").length
+  // ─── 渲染 ────────────────────────────────────────────────────────────────
+  const pendingCount = useMemo(() => comments.filter(c => c.status === "pending").length, [comments])
+  const hotCount = useMemo(() => comments.filter(c => c.intentLevel === "hot").length, [comments])
+  const visible = useMemo(
+    () => comments.slice(visibleRange.start, visibleRange.end),
+    [comments, visibleRange]
+  )
 
   return (
     <div className="panel">
@@ -268,7 +284,6 @@ export default function SidePanel() {
         </button>
       </header>
 
-      {/* 统计 */}
       <div className="stats-row">
         <div className="stat-item">
           <span className="stat-num">{comments.length}</span>
@@ -284,7 +299,6 @@ export default function SidePanel() {
         </div>
       </div>
 
-      {/* 筛选 */}
       <div className="filter-row">
         {(["all", "hot", "pending"] as const).map(f => (
           <button
@@ -297,33 +311,32 @@ export default function SidePanel() {
         ))}
       </div>
 
-      {/* 评论列表 */}
       {!loading && comments.length === 0 && (
         <div className="empty">
           {switching ? (
-            <>
-              <p>正在同步新帖子评论…</p>
-              <p className="hint">请稍候</p>
-            </>
+            <><p>正在同步新帖子评论…</p><p className="hint">请稍候</p></>
           ) : (
-            <>
-              <p>暂无评论</p>
-              <p className="hint">打开小红书笔记页面，评论会自动同步</p>
-            </>
+            <><p>暂无评论</p><p className="hint">打开小红书笔记页面，评论会自动同步</p></>
           )}
         </div>
       )}
 
-      <div className="comment-list">
-        {comments.map(comment => {
+      <div className="comment-list" ref={listContainerRef}>
+        {topHeight > 0 && <div style={{ height: topHeight, flexShrink: 0 }} />}
+
+        {visible.map(comment => {
           const ai = aiStates[comment.id]
           const intent = intentConfig[comment.intentLevel ?? "cold"]
-
           return (
             <div
               key={comment.id}
               className="comment-card"
-              ref={el => { cardRefs.current[comment.id] = el }}
+              ref={el => {
+                cardRefs.current[comment.id] = el
+                if (el && itemHeightsRef.current[comment.id] !== el.offsetHeight) {
+                  itemHeightsRef.current[comment.id] = el.offsetHeight
+                }
+              }}
             >
               <div className="comment-meta">
                 <span className="author">{comment.authorName}</span>
@@ -336,10 +349,8 @@ export default function SidePanel() {
                   ✨ 生成 AI 回复
                 </button>
               )}
-
               {ai?.loading && <div className="ai-loading">AI 思考中…</div>}
               {ai?.error && <div className="ai-error">{ai.error}</div>}
-
               {ai && !ai.loading && ai.suggestions.length > 0 && (
                 <div className="suggestions">
                   {ai.suggestions.map((s, i) => (
@@ -353,10 +364,7 @@ export default function SidePanel() {
                       </button>
                     </div>
                   ))}
-                  <button
-                    className="regenerate-btn"
-                    onClick={() => generateReply(comment)}
-                  >
+                  <button className="regenerate-btn" onClick={() => generateReply(comment)}>
                     重新生成
                   </button>
                 </div>
@@ -364,6 +372,8 @@ export default function SidePanel() {
             </div>
           )
         })}
+
+        {bottomHeight > 0 && <div style={{ height: bottomHeight, flexShrink: 0 }} />}
       </div>
     </div>
   )
