@@ -23,6 +23,7 @@ let SELECTORS = {
 }
 
 const seenIds = new Set<string>()
+const SEEN_IDS_MAX = 3000 // 防内存无限增长；后端按 platformCommentId 去重，重发无害
 let consecutiveFailures = 0
 const MAX_FAILURES = 5
 let currentUrl = location.href
@@ -84,6 +85,19 @@ function scanAllComments(): ScrapedComment[] {
   consecutiveFailures = 0
   const results: ScrapedComment[] = []
 
+  // size 超限时只保留本次可见节点的 ID，避免历史 ID 堆积导致内存无限增长
+  // 清空后本次节点会重新入 seenIds，后端有 platformCommentId 去重兜底
+  if (seenIds.size > SEEN_IDS_MAX) {
+    const visibleIds = new Set(
+      Array.from(nodes)
+        .map(n => parseCommentNode(n)?.platformCommentId)
+        .filter(Boolean) as string[]
+    )
+    for (const id of seenIds) {
+      if (!visibleIds.has(id)) seenIds.delete(id)
+    }
+  }
+
   nodes.forEach((node) => {
     const c = parseCommentNode(node)
     if (c && !seenIds.has(c.platformCommentId)) {
@@ -104,14 +118,13 @@ function sendComments(comments: ScrapedComment[]) {
   })
 }
 
-// 首次扫描，等评论区渲染完成
-function initialScan(retries = 5) {
+// 首次扫描，指数退避重试（1s → 1.5s → 2.25s → …，最长 5s）
+function initialScan(retries = 5, delay = 1000) {
   const comments = scanAllComments()
   if (comments.length > 0) {
     sendComments(comments)
   } else if (retries > 0) {
-    // 评论区还没渲染，1秒后重试
-    setTimeout(() => initialScan(retries - 1), 1000)
+    setTimeout(() => initialScan(retries - 1, Math.min(delay * 1.5, 5000)), delay)
   }
 }
 
@@ -177,13 +190,25 @@ async function fillReply(platformCommentId: string, text: string): Promise<{ ok:
     return { ok: false, error: "input_not_found" }
   }
 
-  // contenteditable p 元素：先清空再填入
   const el = input as HTMLElement
   el.focus()
-  // 清空现有内容
   el.textContent = ""
-  // 用 execCommand 填入，触发 Vue/React 的响应式更新
+
+  // 优先用现代 InputEvent（Chrome 60+），触发框架响应式更新
+  el.dispatchEvent(new InputEvent("beforeinput", {
+    inputType: "insertText",
+    data: text,
+    bubbles: true,
+    cancelable: true,
+  }))
+  // execCommand 已废弃但仍被 Chrome 支持，作为兜底确保文字实际插入
   document.execCommand("insertText", false, text)
+  // 若两者都未写入（极少数环境），直接赋值并派发 input 事件
+  if (!el.textContent) {
+    el.textContent = text
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+
   el.focus()
   return { ok: true }
 }
@@ -316,10 +341,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 })
 
-// 启动
+// 启动：500ms 后开始扫描（MutationObserver 会持续捕获后续加载的评论）
 setTimeout(() => {
   initialScan()
   observer.observe(document.body, { childList: true, subtree: true })
-  // 延迟一点等评论节点全部渲染
-  setTimeout(setupScrollSync, 1000)
-}, 2000)
+  setTimeout(setupScrollSync, 500)
+}, 500)

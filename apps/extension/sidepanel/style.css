@@ -201,11 +201,36 @@ body {
   padding: 8px 0;
 }
 
+.ai-error-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+}
+
 .ai-error {
-  text-align: center;
   font-size: 12px;
   color: #ff4444;
-  padding: 6px 0;
+  flex: 1;
+}
+
+.retry-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid #ff4444;
+  border-radius: 5px;
+  background: #fff;
+  color: #ff4444;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.retry-btn:hover {
+  background: #ff4444;
+  color: #fff;
 }
 
 /* Suggestions */

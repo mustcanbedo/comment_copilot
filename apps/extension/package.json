@@ -4,11 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "plasmo dev",
+    "dev:prod": "plasmo dev --env=.env.production",
     "build": "plasmo build",
     "package": "plasmo package"
   },
   "dependencies": {
     "@plasmohq/storage": "^1.13.0",
+    "lodash": "^4.17.23",
     "plasmo": "^0.86.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
@@ -16,6 +18,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.300",
+    "@types/lodash": "^4.17.24",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "typescript": "^5.7.0"
@@ -28,7 +31,9 @@
     ],
     "host_permissions": [
       "https://www.xiaohongshu.com/*",
-      "https://www.douyin.com/*"
+      "https://www.douyin.com/*",
+      "http://localhost:3000/*",
+      "http://47.103.100.114:13000/*"
     ]
   }
 }

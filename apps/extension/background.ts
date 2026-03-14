@@ -1,4 +1,5 @@
 import { Storage } from "@plasmohq/storage"
+import { API_BASE, DEFAULT_TENANT_ID } from "./constants"
 
 const storage = new Storage()
 
@@ -9,24 +10,6 @@ chrome.action.onClicked.addListener((tab) => {
     chrome.sidePanel?.open({ tabId: tab.id })
   }
 })
-
-// 本地开发指向 Next.js dev server，生产环境通过 .env 覆盖
-const API_BASE = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:3000/api"
-const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-// 速率限制：维护最近操作时间戳
-const replyTimestamps: number[] = []
-const REPLY_THROTTLE_MS = 30_000
-
-function canSendReply(): boolean {
-  const now = Date.now()
-  // 清理 1 小时前的记录
-  const recent = replyTimestamps.filter(t => now - t < 3_600_000)
-  replyTimestamps.length = 0
-  replyTimestamps.push(...recent)
-  if (recent.length === 0) return true
-  return now - recent[recent.length - 1] >= REPLY_THROTTLE_MS
-}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "COMMENTS_COLLECTED") {
@@ -45,18 +28,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true })
   }
 
-  if (message.type === "SCROLL_TO_COMMENT") {
-    chrome.runtime.sendMessage({ type: "SCROLL_TO_COMMENT", payload: message.payload }).catch(() => {})
-    sendResponse({ ok: true })
-  }
-
-  if (message.type === "URL_CHANGED") {
-    chrome.runtime.sendMessage({ type: "URL_CHANGED", payload: message.payload }).catch(() => {})
+  // SCROLL_TO_COMMENT / URL_CHANGED 由 content script 直接广播到所有扩展页面
+  // （sidepanel 会直接收到，background 无需转发，转发反而导致 sidepanel 收到两次）
+  if (message.type === "SCROLL_TO_COMMENT" || message.type === "URL_CHANGED") {
     sendResponse({ ok: true })
   }
 
   if (message.type === "FILL_REPLY") {
-    // 转发给当前激活 tab 的 content script
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
       if (tabId) {
@@ -103,7 +81,6 @@ async function handleCommentsCollected(payload: {
     })
     const data = await res.json()
     console.log("[CommentCopilot] ingest:", data)
-    // 通知侧边栏刷新评论列表
     if (data.ok && data.saved > 0) {
       chrome.runtime.sendMessage({ type: "COMMENTS_UPDATED" }).catch(() => {})
     }
@@ -119,10 +96,6 @@ async function handleGetAiReply(payload: {
   commentContent: string
   persona?: string
 }) {
-  if (!canSendReply()) {
-    return { ok: false, error: "rate_limited", suggestions: [] }
-  }
-
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
 
   try {
@@ -134,11 +107,7 @@ async function handleGetAiReply(payload: {
       },
       body: JSON.stringify(payload),
     })
-    const data = await res.json()
-    if (data.ok) {
-      replyTimestamps.push(Date.now())
-    }
-    return data
+    return await res.json()
   } catch (err) {
     console.error("[CommentCopilot] ai reply error:", err)
     return { ok: false, suggestions: [] }
