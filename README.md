@@ -95,7 +95,7 @@ comment_copilot/
 
 - Go 1.21+
 - Node.js 18+
-- pnpm
+- npm
 
 ### 1. 克隆项目
 
@@ -126,12 +126,12 @@ go run ./cmd/server
 
 ```bash
 cd apps/extension
-pnpm install
+npm install
 
 # macOS arm64 需额外修复 sharp
 npm install --platform=darwin --arch=arm64v8 sharp
 
-pnpm dev
+npm run dev
 # → 打开 Chrome → 扩展程序 → 加载已解压 → 选择 .plasmo/chrome-mv3-dev
 ```
 
@@ -177,7 +177,7 @@ go build -o server ./cmd/server
 
 ```bash
 cd apps/extension
-pnpm build
+npm run build
 # → build/chrome-mv3-prod 目录，上传至 Chrome Web Store
 ```
 

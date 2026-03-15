@@ -8,12 +8,12 @@
 
 ```bash
 cd apps/extension
-pnpm install
+npm install
 
 # macOS arm64 需额外修复 sharp
 npm install --platform=darwin --arch=arm64v8 sharp
 
-pnpm dev
+npm run dev
 # → 打开 Chrome → chrome://extensions/ → 开发者模式 → 加载已解压 → 选择 .plasmo/chrome-mv3-dev
 ```
 
@@ -25,7 +25,7 @@ pnpm dev
 
 ```bash
 cd apps/extension
-pnpm build
+npm run build
 ```
 
 产物在 **`apps/extension/build/chrome-mv3-prod`** 目录。
@@ -41,7 +41,7 @@ pnpm build
 
 ```bash
 cd apps/extension
-pnpm package
+npm run package
 ```
 
 会在 `build/` 下生成 `chrome-mv3-prod.zip`，拷到目标机器解压后同上操作。
@@ -62,7 +62,7 @@ pnpm package
 
 - **"无法加载扩展程序"**：确认选中的是**文件夹**（里面有 `manifest.json`），不是 zip 或上一级目录。
 - **"清单文件缺失或不可读"**：路径不要包含中文或特殊字符；尽量用英文文件夹名。
-- **更新插件**：重新 `pnpm build`，把新的 `build/chrome-mv3-prod` 覆盖到目标机器，然后在 `chrome://extensions/` 点击该扩展的**刷新**图标即可。
+- **更新插件**：重新 `npm run build`，把新的 `build/chrome-mv3-prod` 覆盖到目标机器，然后在 `chrome://extensions/` 点击该扩展的**刷新**图标即可。
 - **macOS arm64 sharp 报错**：运行 `npm install --platform=darwin --arch=arm64v8 sharp` 修复。
 
 ---

@@ -24,6 +24,8 @@
     "typescript": "^5.7.0"
   },
   "manifest": {
+    "name": "Comment Copilot",
+    "description": "小红书评论区 AI 助手，自动采集评论并生成回复建议",
     "permissions": [
       "storage",
       "activeTab",
