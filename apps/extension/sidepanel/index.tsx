@@ -25,6 +25,10 @@ interface Comment {
   status: string
   intentLevel: string | null
   postUrl: string | null
+  /** 与 content 中 [表情] 一一对应的 emoji 图 URL，侧栏用 img 展示 */
+  emojiUrls?: string[]
+  /** 评论附图（.comment-picture），纯图评论时 content 为【图片】 */
+  attachmentImageUrls?: string[]
 }
 
 interface PageComment {
@@ -33,6 +37,8 @@ interface PageComment {
   content: string
   commentedAt: string
   postUrl: string
+  emojiUrls?: string[]
+  attachmentImageUrls?: string[]
 }
 
 interface AiState {
@@ -62,6 +68,8 @@ function mergeWithDb(pageComments: PageComment[], dbMap: Map<string, Comment>): 
       postUrl: pc.postUrl,
       status: db?.status ?? "pending",
       intentLevel: db?.intentLevel ?? null,
+      ...(pc.emojiUrls?.length ? { emojiUrls: pc.emojiUrls } : {}),
+      ...(pc.attachmentImageUrls?.length ? { attachmentImageUrls: pc.attachmentImageUrls } : {}),
     }
   })
 }
@@ -126,13 +134,35 @@ export default function SidePanel() {
     return () => container.removeEventListener("scroll", updateVisibleRange)
   }, [comments, updateVisibleRange])
 
+  const clearPost = useCallback(() => {
+    setComments([])
+    setAiStates({})
+    dbInfoRef.current = new Map()
+    itemHeightsRef.current = {}
+    setVisibleRange({ start: 0, end: 20 })
+    setSwitching(true)
+  }, [])
+
+  const isNotePage = useCallback((url?: string) => {
+    return Boolean(url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url))
+  }, [])
+
   // ─── 拉取评论（页面主导 + DB 补充，两路并行）─────────────────────────────
+  // 依赖说明：fetchComments 依赖 filter，因拉取后要 applyFilter(filter)；下方 effect 依赖 [fetchComments]，
+  // 故切换「全部/高意向/待处理」时会重新拉取并筛一次。若后续拆 effect，勿误加/误删依赖，避免多余请求或 filter 不同步。
   const fetchComments = useCallback(async () => {
     setLoading(true)
     try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!isNotePage(tab?.url)) {
+        clearPost()
+        setSwitching(false)
+        setLoading(false)
+        return
+      }
+
       const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
 
-      // 两路请求并行发出，任一失败不影响另一路
       const [pageResult, dbResult] = await Promise.allSettled([
         // 1. 从 content script 拿页面全量评论（顺序与小红书一致）
         chrome.runtime.sendMessage({ type: "GET_ALL_PAGE_COMMENTS" }),
@@ -162,9 +192,11 @@ export default function SidePanel() {
         dbInfoRef.current = map
       }
 
-      const list = pageComments.length > 0
-        ? applyFilter(mergeWithDb(pageComments, dbInfoRef.current), filter)
-        : applyFilter(Array.from(dbInfoRef.current.values()), filter)
+      // 只展示当前页 DOM 的评论（用 DB 补充 status/intent）；当前笔记无评论时不要展示其他笔记的评论
+      const list =
+        pageComments.length > 0
+          ? applyFilter(mergeWithDb(pageComments, dbInfoRef.current), filter)
+          : []
 
       setComments(list)
       setVisibleRange({ start: 0, end: 20 })
@@ -172,10 +204,11 @@ export default function SidePanel() {
       console.error(e)
     } finally {
       setLoading(false)
+      setSwitching(false)
     }
-  }, [filter])
+  }, [filter, isNotePage, clearPost])
 
-  useEffect(() => { fetchComments() }, [fetchComments])
+  useEffect(() => { fetchComments() }, [fetchComments]) // 依赖 fetchComments：filter 变化时其引用会变，从而触发重新拉取与 applyFilter
 
   // content script 可能还未就绪，仅首次 mount 时补一次兜底
   // 不放入 [fetchComments] 依赖，避免 filter 变化时重复触发
@@ -188,13 +221,10 @@ export default function SidePanel() {
   // ─── 消息监听 ────────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (msg: { type: string; payload?: { platformCommentId: string } }) => {
-      if (msg.type === "URL_CHANGED") {
-        setComments([])
-        setAiStates({})
-        dbInfoRef.current = new Map()
-        itemHeightsRef.current = {}
-        setVisibleRange({ start: 0, end: 20 })
-        setSwitching(true)
+      if (msg.type === "URL_CHANGED" || msg.type === "PAGE_LEFT_NOTE") {
+        clearPost()
+        // 同一链接再次进入时 content 会发 URL_CHANGED 并重扫；延迟拉取确保能拿到 GET_ALL_PAGE_COMMENTS
+        if (msg.type === "URL_CHANGED") setTimeout(fetchComments, 2000)
       }
 
       if (msg.type === "COMMENTS_UPDATED") {
@@ -234,7 +264,23 @@ export default function SidePanel() {
 
     chrome.runtime.onMessage.addListener(handler)
     return () => chrome.runtime.onMessage.removeListener(handler)
-  }, [fetchComments])
+  }, [fetchComments, clearPost])
+
+  // 切换标签时：非笔记页则清空；是笔记页则主动拉评论（解决同一链接再次进入或切回该标签时不显示评论）
+  useEffect(() => {
+    const isNotePage = (url?: string) => url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url ?? "")
+
+    const onActivated = (info: chrome.tabs.TabActiveInfo) => {
+      chrome.tabs.get(info.tabId, (tab) => {
+        if (chrome.runtime.lastError) return
+        if (!isNotePage(tab.url)) clearPost()
+        else fetchComments()
+      })
+    }
+
+    chrome.tabs.onActivated.addListener(onActivated)
+    return () => chrome.tabs.onActivated.removeListener(onActivated)
+  }, [clearPost, fetchComments])
 
   // ─── AI 回复 ─────────────────────────────────────────────────────────────
   // 用 inflightRef 按 commentId 维度防重：不同评论互不干扰，同一评论请求中时不重复发
@@ -244,9 +290,19 @@ export default function SidePanel() {
 
     setAiStates(prev => ({ ...prev, [comment.id]: { loading: true, suggestions: [], copied: null } }))
     try {
+      const post = await new Promise<{ postTitle: string; postContent: string }>((resolve) => {
+        chrome.runtime.sendMessage({ type: "GET_POST_CONTENT" }, (res: { postTitle?: string; postContent?: string }) => {
+          resolve({ postTitle: res?.postTitle ?? "", postContent: res?.postContent ?? "" })
+        })
+      })
       const result = await chrome.runtime.sendMessage({
         type: "GET_AI_REPLY",
-        payload: { commentId: comment.id, commentContent: comment.content },
+        payload: {
+          commentId: comment.id,
+          commentContent: comment.content,
+          postTitle: post.postTitle,
+          postContent: post.postContent,
+        },
       })
       const errorMsg = result?.ok === false ? (result.error || "生成失败") : undefined
       setAiStates(prev => ({
@@ -362,7 +418,37 @@ export default function SidePanel() {
                 <span className="author">{comment.authorName}</span>
                 <span className="intent-badge">{intent.emoji} {intent.label}</span>
               </div>
-              <p className="comment-content">{comment.content}</p>
+              <p className="comment-content">
+                {comment.emojiUrls?.length && comment.content.includes("[表情]")
+                  ? comment.content.split("[表情]").flatMap((seg, i) => [
+                      <span key={`t-${i}`}>{seg}</span>,
+                      ...(comment.emojiUrls![i]
+                        ? [
+                            <img
+                              key={`e-${i}`}
+                              src={comment.emojiUrls![i]}
+                              alt=""
+                              className="comment-emoji"
+                              referrerPolicy="no-referrer"
+                            />,
+                          ]
+                        : []),
+                    ])
+                  : comment.content}
+              </p>
+              {comment.attachmentImageUrls?.length ? (
+                <div className="comment-attachments">
+                  {comment.attachmentImageUrls.map((url, i) => (
+                    <img
+                      key={i}
+                      src={url}
+                      alt="评论图片"
+                      className="comment-attachment-img"
+                      referrerPolicy="no-referrer"
+                    />
+                  ))}
+                </div>
+              ) : null}
 
               {!ai && (
                 <button className="reply-btn" onClick={() => generateReply(comment)}>

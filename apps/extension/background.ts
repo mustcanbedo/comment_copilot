@@ -3,12 +3,26 @@ import { API_BASE, DEFAULT_TENANT_ID } from "./constants"
 
 const storage = new Storage()
 
+function isNotePage(url?: string): boolean {
+  return Boolean(url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url))
+}
+
 // 点击插件图标时打开侧边栏
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id) {
     // @ts-ignore - chrome.sidePanel 在旧版类型定义里可能不存在
     chrome.sidePanel?.open({ tabId: tab.id })
   }
+})
+
+// 同一标签内 URL 变化（如从笔记页整页跳转到首页）：若变为非笔记页，通知侧边栏清空
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.url || isNotePage(tab.url)) return
+  chrome.tabs.query({ active: true, currentWindow: true }, ([active]) => {
+    if (active?.id === tabId) {
+      chrome.runtime.sendMessage({ type: "PAGE_LEFT_NOTE" }).catch(() => {})
+    }
+  })
 })
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -62,6 +76,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     return true
   }
+
+  if (message.type === "GET_POST_CONTENT") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: "GET_POST_CONTENT" }, (res) => {
+          sendResponse(res ?? { postTitle: "", postContent: "" })
+        })
+      } else {
+        sendResponse({ postTitle: "", postContent: "" })
+      }
+    })
+    return true
+  }
 })
 
 async function handleCommentsCollected(payload: {
@@ -95,6 +123,8 @@ async function handleGetAiReply(payload: {
   commentId: string
   commentContent: string
   persona?: string
+  postTitle?: string
+  postContent?: string
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
 

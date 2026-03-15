@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +29,8 @@ func (h *AIHandler) Reply(c *gin.Context) {
 		CommentID      string `json:"commentId" binding:"required"`
 		CommentContent string `json:"commentContent" binding:"required"`
 		Persona        string `json:"persona"`
+		PostTitle      string `json:"postTitle"`
+		PostContent    string `json:"postContent"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
@@ -57,9 +60,19 @@ func (h *AIHandler) Reply(c *gin.Context) {
 2. 语气亲切，符合中文社交媒体风格
 3. 不要使用“您”，用“你”更自然
 4. 不要在回复中提及微信号、手机号等敏感信息
-5. 输出 JSON 格式：{"suggestions": ["回复1", "回复2", "回复3"]}`, persona)
+5. 结合帖子内容回复，使回复与笔记主题相关
+6. 若用户评论中出现“[表情]”，表示该处为表情图片（如笑哭、点赞等），请结合前后文推断情绪并自然回复，不要在回复中写出“[表情]”或“表情”字样
+7. 输出 JSON 格式：{"suggestions": ["回复1", "回复2", "回复3"]}`, persona)
 
-	userPrompt := fmt.Sprintf("用户评论：%s\n\n请生成3条候选回复。", req.CommentContent)
+	commentHint := ""
+	if strings.TrimSpace(req.CommentContent) == "【图片】" {
+		commentHint = "（该评论为纯图片，请根据帖子内容生成通用友好回复，勿描述或回复图片本身。） "
+	}
+	userPrompt := fmt.Sprintf("用户评论：%s\n\n%s请生成3条候选回复。", req.CommentContent, commentHint)
+	if req.PostTitle != "" || req.PostContent != "" {
+		userPrompt = fmt.Sprintf("【当前帖子】\n标题：%s\n正文：%s\n\n【用户评论】%s\n\n%s请结合帖子内容生成3条候选回复。",
+			req.PostTitle, req.PostContent, req.CommentContent, commentHint)
+	}
 
 	payload := map[string]any{
 		"model": "deepseek-chat",

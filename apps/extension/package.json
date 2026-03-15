@@ -29,7 +29,8 @@
     "permissions": [
       "storage",
       "activeTab",
-      "sidePanel"
+      "sidePanel",
+      "tabs"
     ],
     "host_permissions": [
       "https://www.xiaohongshu.com/*",

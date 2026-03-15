@@ -12,6 +12,10 @@ interface ScrapedComment {
   content: string
   commentedAt: string
   postUrl: string
+  /** 无 alt 的 emoji 图片 URL，与 content 中 [表情] 一一对应，供侧栏用 img 展示 */
+  emojiUrls?: string[]
+  /** 评论附带的图片（.comment-picture），纯图评论时 content 为【图片】 */
+  attachmentImageUrls?: string[]
 }
 
 // 默认 selector，从服务端热更新覆盖
@@ -28,16 +32,57 @@ let consecutiveFailures = 0
 const MAX_FAILURES = 5
 let currentUrl = location.href
 
+/** 拼接节点内文本并收集无 alt 的 emoji 图 URL：文本用 alt 或 [表情]，无 alt 时把 src 放入 emojiUrls 供侧栏用 img 展示 */
+function getTextAndEmojiUrls(el: Element): { text: string; emojiUrls: string[] } {
+  const parts: string[] = []
+  const emojiUrls: string[] = []
+  function walk(e: Element) {
+    e.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const t = node.textContent?.trim()
+        if (t) parts.push(t)
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = node as Element
+        if (tag.tagName === "IMG") {
+          const alt =
+            tag.getAttribute("alt")?.trim() ||
+            tag.getAttribute("data-emoji")?.trim() ||
+            (tag as HTMLImageElement).dataset?.emoji
+          const src = (tag as HTMLImageElement).src?.trim()
+          if (alt) parts.push(alt)
+          else {
+            parts.push("[表情]")
+            if (src) emojiUrls.push(src)
+          }
+        } else {
+          walk(tag)
+        }
+      }
+    })
+  }
+  walk(el)
+  return { text: parts.join("").trim(), emojiUrls }
+}
+
+/** 无 data-comment-id 时用「作者+正文」生成稳定 ID；选择器与 parseCommentNode 一致，兼容 .right / .content 等 DOM */
+function getCommentFingerprint(el: Element): string {
+  const author = (el.querySelector(SELECTORS.authorName) as HTMLElement)?.innerText?.slice(0, 10) ?? ""
+  const contentEl =
+    el.querySelector('.note-text, .content .note-text') ||
+    el.querySelector('.content') ||
+    el.querySelector('[class*="content"]') ||
+    el.querySelector(SELECTORS.content)
+  const content = (contentEl as HTMLElement)?.innerText?.slice(0, 20) ?? ""
+  return author + content
+}
+
+/** 优先用 data-comment-id / data-id / id；都没有则用 getCommentFingerprint 生成，保证多套 DOM 下 ID 稳定 */
 function extractCommentId(el: Element): string {
   return (
     el.getAttribute("data-comment-id") ||
     el.getAttribute("data-id") ||
     (el.id || null) ||
-    // 用 encodeURIComponent 再 btoa，支持中文等非 ASCII 字符
-    `xhs_${btoa(encodeURIComponent(
-      ((el.querySelector(SELECTORS.authorName) as HTMLElement)?.innerText?.slice(0, 10) ?? "") +
-      ((el.querySelector(SELECTORS.content) as HTMLElement)?.innerText?.slice(0, 20) ?? "")
-    )).slice(0, 16)}`
+    `xhs_${btoa(encodeURIComponent(getCommentFingerprint(el))).slice(0, 16)}`
   )
 }
 
@@ -48,25 +93,70 @@ function parseCommentNode(node: Element): ScrapedComment | null {
   const authorTag = node.querySelector('.author-wrapper .tag, .author-tag, [class*="author-tag"]')
   if (authorTag && authorTag.textContent?.trim() === "作者") return null
 
-  // 找第一个没有 class 的 span 作为评论内容
-  const innerContainer = node.querySelector('.comment-inner-container')
-  const spans = innerContainer ? Array.from(innerContainer.querySelectorAll('span')) : []
-  const contentEl = spans.find(s => !s.className && s.textContent && s.textContent.trim().length > 1) ?? null
+  // 小红书有多套 DOM：有的用 .comment-inner-container，有的用 .right 包 .content/.author-wrapper/.info
+  const innerContainer =
+    node.querySelector('.comment-inner-container') ||
+    node.querySelector('.right') ||
+    node
+  if (!innerContainer) return null
 
-  // 找时间：内容 span 之后的无 class span
-  const timeEl = contentEl?.nextElementSibling as HTMLElement | null
+  // 正文：.content 下的 .note-text（span + img），无 alt 时用 [表情] 并记下 img src 到 emojiUrls
+  const contentContainers = [
+    innerContainer.querySelector('.note-text, .content .note-text'),
+    innerContainer.querySelector('.content'),
+    innerContainer.querySelector('[class*="content"]'),
+  ].filter(Boolean) as Element[]
+  let content = ""
+  let emojiUrls: string[] = []
+  for (const container of contentContainers) {
+    const { text, emojiUrls: urls } = getTextAndEmojiUrls(container)
+    content = text.trim()
+    emojiUrls = urls
+    if (content.length >= 2) break
+  }
+  if (!content) {
+    const spans = Array.from(innerContainer.querySelectorAll('span'))
+    const contentEl = spans.find(s => !s.className && s.textContent && s.textContent.trim().length > 1) ?? null
+    if (contentEl?.parentElement) {
+      const { text, emojiUrls: urls } = getTextAndEmojiUrls(contentEl.parentElement)
+      content = text.trim()
+      emojiUrls = urls
+    }
+    if (!content) content = contentEl?.textContent?.trim() ?? ""
+  }
 
+  // 评论附图：.comment-picture 下的 img（用户发的图片评论）
+  const pictureImgs = node.querySelectorAll('.comment-picture img, [class*="comment-picture"] img')
+  const attachmentImageUrls: string[] = []
+  pictureImgs.forEach((img) => {
+    const src = (img as HTMLImageElement).src?.trim()
+    if (src) attachmentImageUrls.push(src)
+  })
+
+  // 纯图片评论：无文字或极短时，用【图片】占位并保留附图 URL，方便展示和让 AI 生成通用回复
+  if ((!content || content.length < 2) && attachmentImageUrls.length > 0) {
+    content = "【图片】"
+  }
+
+  // 时间：优先 [datetime]，否则 .date 或 .info .date 里的第一个 span（如「1小时前」）
+  const timeEl =
+    innerContainer.querySelector("[datetime]") ||
+    innerContainer.querySelector(".date span, .info .date span")
   const authorName = authorEl?.innerText?.trim()
-  const content = contentEl?.textContent?.trim()
+  const commentedAt =
+    (timeEl?.getAttribute("datetime") ?? (timeEl as HTMLElement)?.innerText?.trim()) || new Date().toISOString()
 
-  if (!authorName || !content || content.length < 2) return null
+  if (!authorName) return null
+  if (!content || (content.length < 2 && attachmentImageUrls.length === 0)) return null
 
   return {
     platformCommentId: extractCommentId(node),
     authorName,
     content,
-    commentedAt: timeEl?.getAttribute("datetime") || new Date().toISOString(),
+    commentedAt,
     postUrl: location.href,
+    ...(emojiUrls.length > 0 ? { emojiUrls } : {}),
+    ...(attachmentImageUrls.length > 0 ? { attachmentImageUrls } : {}),
   }
 }
 
@@ -138,10 +228,10 @@ history.pushState = function (...args) {
 window.addEventListener("popstate", onUrlChange)
 
 function onUrlChange() {
-  if (location.href === currentUrl) return
+  // 同一链接再次进入（如从首页点回同一笔记）也需清空并重新扫描，否则侧边栏不会显示评论
   currentUrl = location.href
   seenIds.clear()
-  // 通知侧边栏：URL 已变化，清空并等待新评论
+  // 通知侧边栏：URL 已变化（或同一链接再次进入），清空并等待新评论
   chrome.runtime.sendMessage({
     type: "URL_CHANGED",
     payload: { url: currentUrl },
@@ -152,13 +242,18 @@ function onUrlChange() {
   }, 1500)
 }
 
-// MutationObserver 监听动态加载的新评论
-const observer = new MutationObserver(() => {
-  const newComments = scanAllComments()
-  if (newComments.length > 0) {
-    sendComments(newComments)
-  }
-})
+// MutationObserver 监听动态加载的新评论；节流：300ms 内多次 DOM 变化只触发一次扫描，减少 CPU 与消息
+const SCAN_THROTTLE_MS = 300
+let scanThrottleTimer: ReturnType<typeof setTimeout> | null = null
+function runThrottledScan() {
+  if (scanThrottleTimer != null) return
+  scanThrottleTimer = setTimeout(() => {
+    scanThrottleTimer = null
+    const newComments = scanAllComments()
+    if (newComments.length > 0) sendComments(newComments)
+  }, SCAN_THROTTLE_MS)
+}
+const observer = new MutationObserver(runThrottledScan)
 
 // 填入回复：找到对应评论节点 → 点击"回复"按钮 → 等输入框弹出 → 填入文字
 async function fillReply(platformCommentId: string, text: string): Promise<{ ok: boolean; error?: string }> {
@@ -328,6 +423,33 @@ function getAllPageComments(): ScrapedComment[] {
   return results
 }
 
+// 帖子标题与正文，用于 AI 回复上下文
+function getPostContent(): { postTitle: string; postContent: string } {
+  let postTitle = ""
+  let postContent = ""
+  try {
+    const state = (window as unknown as { __INITIAL_STATE__?: Record<string, unknown> }).__INITIAL_STATE__
+    if (state) {
+      const note = (state.note as Record<string, unknown>) ?? (state.noteDetail as Record<string, unknown>)
+      if (note) {
+        postTitle = String(note.title ?? note.noteTitle ?? "").trim()
+        postContent = String(note.desc ?? note.content ?? note.noteContent ?? "").trim()
+      }
+    }
+  } catch {
+    // ignore
+  }
+  if (!postTitle) {
+    const el = document.querySelector('[class*="title"]') ?? document.querySelector("h1")
+    postTitle = (el?.textContent ?? "").trim().slice(0, 200)
+  }
+  if (!postContent) {
+    const el = document.querySelector('[class*="desc"]') ?? document.querySelector('[class*="content"]')
+    postContent = (el?.textContent ?? "").trim().slice(0, 2000)
+  }
+  return { postTitle, postContent }
+}
+
 // 监听来自 background 的填入指令与数据查询
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "FILL_REPLY") {
@@ -337,6 +459,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "GET_ALL_PAGE_COMMENTS") {
     sendResponse(getAllPageComments())
+    return false
+  }
+  if (message.type === "GET_POST_CONTENT") {
+    sendResponse(getPostContent())
     return false
   }
 })

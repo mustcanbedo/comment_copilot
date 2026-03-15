@@ -178,6 +178,27 @@ body {
   word-break: break-all;
 }
 
+.comment-content .comment-emoji {
+  vertical-align: middle;
+  height: 1.2em;
+  width: auto;
+}
+
+.comment-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.comment-attachment-img {
+  max-width: 120px;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #eee;
+}
+
 /* Buttons */
 .reply-btn {
   width: 100%;
