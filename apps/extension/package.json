@@ -1,10 +1,10 @@
 {
-  "name": "comment-copilot-extension",
+  "name": "yanling-extension",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "plasmo dev",
-    "dev:prod": "plasmo dev --env=.env.production",
+    "dev": "plasmo dev --hmr-host=localhost --hmr-port=1815",
+    "dev:prod": "plasmo dev --env=.env.production --hmr-host=localhost --hmr-port=1815",
     "build": "plasmo build",
     "package": "plasmo package"
   },
@@ -24,8 +24,8 @@
     "typescript": "^5.7.0"
   },
   "manifest": {
-    "name": "Comment Copilot",
-    "description": "小红书评论区 AI 助手，自动采集评论并生成回复建议",
+    "name": "言灵 Yanling",
+    "description": "小红书评论区 AI 助手 —— 用 AI 回评论，点燃言灵力",
     "permissions": [
       "storage",
       "activeTab",
@@ -37,6 +37,18 @@
       "https://www.douyin.com/*",
       "http://localhost:3000/*",
       "http://47.103.100.114:13000/*"
-    ]
+    ],
+    "icons": {
+      "16": "../assets/yanling_icon_16.png",
+      "32": "../assets/yanling_icon_32.png",
+      "48": "../assets/yanling_icon_48.png",
+      "128": "../assets/yanling_icon_128.png"
+    },
+    "action": {
+      "default_icon": {
+        "16": "../assets/yanling_icon_16.png",
+        "32": "../assets/yanling_icon_32.png"
+      }
+    }
   }
 }

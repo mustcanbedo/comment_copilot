@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrPhoneExists        = errors.New("phone already registered")
+	ErrEmailExists        = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 )
 
@@ -26,13 +26,13 @@ func NewAuthService(repo *repository.AuthRepository) *AuthService {
 	return &AuthService{repo: repo}
 }
 
-func (s *AuthService) Register(phone, password, name string) (*db.User, error) {
-	exists, err := s.repo.CountUserByPhone(phone)
+func (s *AuthService) Register(email, password, name string) (*db.User, error) {
+	exists, err := s.repo.CountUserByEmail(email)
 	if err != nil {
 		return nil, err
 	}
 	if exists > 0 {
-		return nil, ErrPhoneExists
+		return nil, ErrEmailExists
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -41,7 +41,9 @@ func (s *AuthService) Register(phone, password, name string) (*db.User, error) {
 	}
 
 	user := &db.User{
-		Phone:        phone,
+		TenantID:     db.DefaultTenantID,
+		Email:        email,
+		Phone:        email, // 兼容表内 phone NOT NULL，用 email 占位
 		PasswordHash: string(hash),
 		FullName:     name,
 	}
@@ -52,8 +54,8 @@ func (s *AuthService) Register(phone, password, name string) (*db.User, error) {
 	return user, nil
 }
 
-func (s *AuthService) Login(phone, password, secret string) (*db.User, string, error) {
-	user, err := s.repo.FindUserByPhone(phone)
+func (s *AuthService) Login(email, password, secret string) (*db.User, string, error) {
+	user, err := s.repo.FindUserByEmail(email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, "", ErrInvalidCredentials

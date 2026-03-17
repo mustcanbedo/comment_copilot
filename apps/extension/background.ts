@@ -97,6 +97,7 @@ async function handleCommentsCollected(payload: {
   comments: object[]
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
+  const token = await storage.get<string>("authToken")
 
   try {
     const res = await fetch(`${API_BASE}/ingest/comments`, {
@@ -104,6 +105,7 @@ async function handleCommentsCollected(payload: {
       headers: {
         "Content-Type": "application/json",
         "x-tenant-id": tenantId,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(payload),
     })
@@ -127,6 +129,7 @@ async function handleGetAiReply(payload: {
   postContent?: string
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
+  const token = await storage.get<string>("authToken")
 
   try {
     const res = await fetch(`${API_BASE}/ai/reply`, {
@@ -134,6 +137,7 @@ async function handleGetAiReply(payload: {
       headers: {
         "Content-Type": "application/json",
         "x-tenant-id": tenantId,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(payload),
     })

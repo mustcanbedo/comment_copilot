@@ -2,9 +2,10 @@
 
 > 目标：以最小的基础设施负担，快速验证「评论采集 → AI 回复建议 → 潜客转化」核心价值链路。优先选择托管服务，消除运维负担。
 
-最后更新：2026-03-13（v2.0 Serverless 版）
+最后更新：2026-03-13（v2.0 Serverless 版）  
+文档目前以 **Next.js Serverless 架构** 为主，插件 + Go 后端的最新实现见下方「附录 A」。
 
-- **已实现架构**（接口、目录、数据流）：见 [architecture-as-built.md](architecture-as-built.md)。
+- **已实现架构**（Next.js 版本的接口、目录、数据流）：见 [architecture-as-built.md](architecture-as-built.md)。
 - **使用逻辑**（插件为主、Web 为数据分析、身份打通）：见 [usage-flow.md](usage-flow.md)。
 
 ---
@@ -252,3 +253,80 @@ export const scoreIntentFn = inngest.createFunction(
 1. MVP 阶段不引入分区表、物化视图、RLS，待数据量 > 500 万行时再评估。
 2. RBAC 在 MVP 阶段简化为单一 `owner` 角色，M1 再扩展。
 3. WebSocket 实时推送在 MVP 阶段用轮询替代，M1 引入 Supabase Realtime。
+
+---
+
+## 附录 A：当前插件 + Go 后端实现差异（2026-03）
+
+> 这一节用于同步当前仓库内实际实现（Go 后端 + 插件本地存储），与上文 Next.js Serverless 架构存在一定差异。
+
+### A.1 后端形态
+
+- **当前实际后端**：Go + Gin + GORM + PostgreSQL
+  - 入口：`backend/cmd/server`
+  - 路由：`backend/internal/server/router.go`
+  - 认证中间件：`backend/internal/middleware/auth.go` 中的 `RequireAuth`
+  - 业务 Handler：`backend/internal/handler/*`
+- **认证方式**：
+  - `/api/auth/login`：邮箱 + 密码登录，返回 JWT token，并同时写入 `cc_token` Cookie。
+  - 受保护接口（`/api/comments`、`/api/ingest/comments`、`/api/ai/reply` 等）统一挂载 `RequireAuth`，要求：
+    - `Authorization: Bearer <token>`，或
+    - `Cookie: cc_token=<token>`。
+  - `/api/auth/me`：基于 JWT 中的 `userId` 返回用户信息（`id/email/name`）。
+
+### A.2 插件 Side Panel 结构（当前实现）
+
+主入口：`apps/extension/sidepanel/index.tsx`，结构上已拆为一个状态容器 + 4 个页面组件：
+
+- `SidePanel`：容器组件
+  - 管理登录态、用户信息、评论列表、AI 状态、存言列表等。
+  - 通过 `activeNav: "account" | "zhiyan" | "cunyan" | "settings"` 控制当前页面。
+- `ZhiyanPage`（智言）：
+  - 评论列表虚拟滚动（按当前小红书页面 DOM + 后端 `/comments?postUrl=` 合并）。
+  - 每条评论支持生成 AI 回复（调用 `/api/ai/reply`），展示多条建议。
+  - 每条 AI 建议支持：
+    - 「回复」：自动填入小红书输入框；
+    - 「收藏」：保存为存言（见 A.3）。
+- `CunyanPage`（存言）：
+  - 展示本地收藏的 AI 回复列表。
+  - 支持按「分类」筛选（目前默认分类为「默认」）和关键字搜索。
+- `AccountPage`（我的账户）：
+  - 展示当前登录用户信息（头像首字母 / 邮箱 / 昵称）。
+  - 提供「退出登录」按钮（清除插件内 `authToken`，回到登录页）。
+- `SettingsPage`（设置）：
+  - 目前为占位，展示通用设置卡片和即将上线提示。
+
+### A.3 存言（收藏回复）实现
+
+- 数据模型（前端）：
+
+```ts
+interface SavedReply {
+  id: string
+  text: string
+  fromComment: string       // 评论内容前 80 字
+  createdAt: string         // ISO 时间
+  category: string          // 目前固定为 "默认"
+}
+```
+
+- 持久化方式：
+  - 使用 `@plasmohq/storage` 本地存储，不走后端。
+  - key 为 `savedReplies:v1:<userId>`，通过 `getSavedRepliesKey(userId)` 生成：
+
+```ts
+const SAVED_REPLIES_KEY_PREFIX = "savedReplies:v1"
+const getSavedRepliesKey = (userId: string | null | undefined) =>
+  `${SAVED_REPLIES_KEY_PREFIX}:${userId || "anonymous"}`
+```
+
+- 多账号隔离：
+  - 登录成功后通过 `/api/auth/me` 获取 `user.id`，`SidePanel` 中根据 `userProfile.id`：
+    - 初始化时从对应 key 读取该用户的存言。
+    - 收藏 / 取消收藏时写回该 key。
+
+> 未来如果要与数据库同步存言，可在 Go 后端补充：
+> - `GET /api/saved-replies`
+> - `POST /api/saved-replies`
+> - `DELETE /api/saved-replies/:id`
+> 并保持与当前 `SavedReply` 结构兼容。

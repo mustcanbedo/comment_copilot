@@ -14,9 +14,9 @@ func NewAuthRepository(gdb *gorm.DB) *AuthRepository {
 	return &AuthRepository{db: gdb}
 }
 
-func (r *AuthRepository) CountUserByPhone(phone string) (int64, error) {
+func (r *AuthRepository) CountUserByEmail(email string) (int64, error) {
 	var exists int64
-	err := r.db.Model(&db.User{}).Where("phone = ?", phone).Count(&exists).Error
+	err := r.db.Model(&db.User{}).Where("email = ?", email).Count(&exists).Error
 	return exists, err
 }
 
@@ -24,9 +24,9 @@ func (r *AuthRepository) CreateUser(u *db.User) error {
 	return r.db.Create(u).Error
 }
 
-func (r *AuthRepository) FindUserByPhone(phone string) (*db.User, error) {
+func (r *AuthRepository) FindUserByEmail(email string) (*db.User, error) {
 	var user db.User
-	if err := r.db.Where("phone = ?", phone).First(&user).Error; err != nil {
+	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil

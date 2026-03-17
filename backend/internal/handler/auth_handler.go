@@ -19,7 +19,7 @@ func NewAuthHandler(authSvc *service.AuthService) *AuthHandler {
 
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req struct {
-		Phone    string `json:"phone" binding:"required,min=6,max=20"`
+		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=8"`
 		Name     string `json:"name"`
 	}
@@ -28,13 +28,15 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authSvc.Register(req.Phone, req.Password, req.Name)
+	user, err := h.authSvc.Register(req.Email, req.Password, req.Name)
 	if err != nil {
-		if errors.Is(err, service.ErrPhoneExists) {
-			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "phone already registered"})
+		if errors.Is(err, service.ErrEmailExists) {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "该邮箱已注册"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "register failed"})
+		// 返回具体错误便于排查（如数据库未连接、表未创建等）
+		errMsg := err.Error()
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "register failed", "detail": errMsg})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "userId": user.ID})
@@ -43,7 +45,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) Login(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Phone    string `json:"phone" binding:"required,min=6,max=20"`
+			Email    string `json:"email" binding:"required,email"`
 			Password string `json:"password" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -51,10 +53,10 @@ func (h *AuthHandler) Login(secret string) gin.HandlerFunc {
 			return
 		}
 
-		user, token, err := h.authSvc.Login(req.Phone, req.Password, secret)
+		user, token, err := h.authSvc.Login(req.Email, req.Password, secret)
 		if err != nil {
 			if errors.Is(err, service.ErrInvalidCredentials) {
-				c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "invalid phone or password"})
+				c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "邮箱或密码错误"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "login failed"})
@@ -82,7 +84,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"ok": true,
 		"user": gin.H{
 			"id":    user.ID,
-			"phone": user.Phone,
+			"email": user.Email,
 			"name":  user.FullName,
 		},
 	})

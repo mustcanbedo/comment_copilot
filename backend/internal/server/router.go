@@ -2,6 +2,7 @@ package server
 
 import (
 	"comment-copilot-web-backend/internal/handler"
+	"comment-copilot-web-backend/internal/middleware"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -34,8 +35,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		api.POST("/auth/logout", deps.AuthHandler.Logout)
 
 		protected := api.Group("")
-		// protected.Use(middleware.RequireAuth(deps.AuthSecret))
-		// {
+		protected.Use(middleware.RequireAuth(deps.AuthSecret))
+
 		protected.GET("/health", deps.HealthHandler.Get)
 		protected.POST("/auth/register", deps.AuthHandler.Register)
 		protected.GET("/auth/me", deps.AuthHandler.Me)

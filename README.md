@@ -1,4 +1,4 @@
-# 💬 Comment Copilot
+# 💬 言灵 Yanling
 
 > 小红书评论区 AI 助手 —— 自动采集评论、识别高意向用户、一键生成 AI 回复建议。
 
@@ -134,6 +134,8 @@ npm install --platform=darwin --arch=arm64v8 sharp
 npm run dev
 # → 打开 Chrome → 扩展程序 → 加载已解压 → 选择 .plasmo/chrome-mv3-dev
 ```
+
+开发时请保持 `npm run dev` 运行。若未运行 dev 却加载了开发构建的扩展，控制台会出现 `WebSocket connection to 'ws://localhost:1815/' failed`（Plasmo/Parcel 的 HMR 注入），可忽略或改用生产构建：`npm run build` 后加载 `build/chrome-mv3-prod`。
 
 ### 4. 在小红书测试
 

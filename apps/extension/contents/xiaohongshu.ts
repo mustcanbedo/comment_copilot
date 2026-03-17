@@ -165,8 +165,9 @@ function scanAllComments(): ScrapedComment[] {
 
   if (nodes.length === 0) {
     consecutiveFailures++
-    if (consecutiveFailures >= MAX_FAILURES) {
-      chrome.runtime.sendMessage({ type: "CIRCUIT_OPEN" })
+    const isNote = /xiaohongshu\.com.*\/explore\/[a-zA-Z0-9]+/.test(currentUrl)
+    if (consecutiveFailures >= MAX_FAILURES && isNote) {
+      chrome.runtime.sendMessage({ type: "CIRCUIT_OPEN" }).catch(() => {})
       console.warn("[CommentCopilot] Circuit opened: selector failures")
     }
     return []
@@ -205,7 +206,7 @@ function sendComments(comments: ScrapedComment[]) {
   chrome.runtime.sendMessage({
     type: "COMMENTS_COLLECTED",
     payload: { platform: "xiaohongshu", comments },
-  })
+  }).catch(() => {})
 }
 
 // 首次扫描，指数退避重试（1s → 1.5s → 2.25s → …，最长 5s）
