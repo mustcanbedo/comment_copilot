@@ -20,5 +20,7 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 func AutoMigrate(gdb *gorm.DB) error {
 	return gdb.AutoMigrate(
 		&User{},
+		&Comment{},
+		&SavedReply{},
 	)
 }

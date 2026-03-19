@@ -37,17 +37,23 @@ func main() {
 	}
 
 	authRepo := repository.NewAuthRepository(gdb)
+	userRepo := repository.NewUserRepository(gdb)
 	authSvc := service.NewAuthService(authRepo)
+	commentRepo := repository.NewCommentRepository(gdb)
+	savedReplyRepo := repository.NewSavedReplyRepository(gdb)
 
 	router := server.NewRouter(server.RouterDeps{
-		AuthSecret: cfg.AuthSecret,
+		AuthSecret:   cfg.AuthSecret,
+		AuthRepo:     authRepo,
+		CORSOrigins:  cfg.CORSOrigins,
 
-		HealthHandler:   handler.NewHealthHandler(),
-		AuthHandler:     handler.NewAuthHandler(authSvc),
-		CommentHandler:  handler.NewCommentHandler(),
-		SelectorHandler: handler.NewSelectorHandler(),
-		AIHandler:       handler.NewAIHandler(cfg.DeepSeekAPIKey),
-		PersonaHandler:  handler.NewPersonaHandler(cfg.DeepSeekAPIKey),
+		HealthHandler:     handler.NewHealthHandler(),
+		AuthHandler:       handler.NewAuthHandler(authSvc),
+		CommentHandler:    handler.NewCommentHandler(commentRepo),
+		SavedReplyHandler: handler.NewSavedReplyHandler(savedReplyRepo),
+		SelectorHandler:   handler.NewSelectorHandler(),
+		AIHandler:         handler.NewAIHandler(cfg.DeepSeekAPIKey, userRepo),
+		PersonaHandler:    handler.NewPersonaHandler(cfg.DeepSeekAPIKey),
 	})
 
 	log.Printf("Go backend running at http://localhost:%s/api", cfg.Port)
@@ -57,6 +63,8 @@ func main() {
 func ensureSchemaReady(gdb *gorm.DB) error {
 	requiredTables := []any{
 		&db.User{},
+		&db.Comment{},
+		&db.SavedReply{},
 	}
 	for _, tbl := range requiredTables {
 		if !gdb.Migrator().HasTable(tbl) {

@@ -41,11 +41,13 @@ func (s *AuthService) Register(email, password, name string) (*db.User, error) {
 	}
 
 	user := &db.User{
-		TenantID:     db.DefaultTenantID,
-		Email:        email,
-		Phone:        email, // 兼容表内 phone NOT NULL，用 email 占位
-		PasswordHash: string(hash),
-		FullName:     name,
+		TenantID:           db.DefaultTenantID,
+		Email:              email,
+		Phone:              email, // 兼容表内 phone NOT NULL，用 email 占位
+		PasswordHash:       string(hash),
+		FullName:           name,
+		FreePointsBalance:  db.FreePointsQuota, // 注册送 2000 免费积分
+		TopupPointsBalance: 0,
 	}
 	if err := s.repo.CreateUser(user); err != nil {
 		return nil, err

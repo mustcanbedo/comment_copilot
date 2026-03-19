@@ -157,6 +157,8 @@ auth_secret: "your-secret-key"
 auto_migrate: true   # 首次启动设为 true，自动建表
 ```
 
+积分系统：首次部署需执行 `migrations/0004_users_points.sql` 添加积分字段；若使用 `auto_migrate: true`，GORM 会自动添加列，但建议手动执行该迁移以添加负余额 CHECK 约束。
+
 ### apps/extension/.env.development
 
 ```env

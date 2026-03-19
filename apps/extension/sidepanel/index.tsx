@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Storage } from "@plasmohq/storage"
-import { API_BASE, DEFAULT_TENANT_ID } from "../constants"
+import { API_BASE, DEFAULT_TENANT_ID, FEEDBACK_URL } from "../constants"
 import LoginView, { AUTH_TOKEN_KEY } from "./login-view"
 import "./style.css"
+
+const LANGUAGES = [{ code: "zh-CN", label: "简体中文" }] as const
 
 class SidePanelErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -44,6 +46,9 @@ const intentConfig: Record<string, { emoji: string; label: string; badgeClass: s
 
 function getCommentBadge(comment: Comment): { emoji: string; label: string; badgeClass: string } {
   if (comment.intentLevel === "hot") return intentConfig.hot
+  if (comment.status === "done" || comment.status === "replied") {
+    return { emoji: "✅", label: "已回复", badgeClass: "cold" }
+  }
   if (comment.status === "pending") return { emoji: "🕐", label: "待处理", badgeClass: "pending" }
   return intentConfig[comment.intentLevel ?? "cold"]
 }
@@ -84,6 +89,12 @@ interface UserProfile {
   id: string
   email: string
   name: string
+  points?: {
+    freeBalance: number
+    freeQuota: number
+    topupBalance: number
+    total: number
+  }
 }
 
 interface SavedReply {
@@ -100,7 +111,7 @@ type Nav = "account" | "zhiyan" | "cunyan" | "settings"
 
 function applyFilter(list: Comment[], filter: Filter): Comment[] {
   if (filter === "hot") return list.filter(c => c.intentLevel === "hot")
-  if (filter === "pending") return list.filter(c => c.status === "pending")
+  if (filter === "pending") return list.filter(c => c.status !== "done" && c.status !== "replied")
   return list
 }
 
@@ -178,7 +189,7 @@ function ZhiyanPage(props: {
         </div>
         <div className="stat-item">
           <span className="stat-num">{pendingCount}</span>
-          <span className="stat-label">待处理</span>
+          <span className="stat-label">🕐 待处理</span>
         </div>
       </div>
 
@@ -189,7 +200,7 @@ function ZhiyanPage(props: {
             className={`filter-btn ${filter === f ? "active" : ""}`}
             onClick={() => setFilter(f)}
           >
-            {{ all: "全部", hot: "🔥 高意向", pending: "🕐 待处理" }[f]}
+            {f === "all" ? "全部" : f === "hot" ? "🔥 高意向" : "🕐 待处理"}
           </button>
         ))}
       </div>
@@ -393,46 +404,220 @@ function CunyanPage(props: {
   )
 }
 
+const FREE_POINTS_QUOTA = 2000
+
 // ─── 页面组件：我的账户 ─────────────────────────────────────────────────────
 function AccountPage({ profile, onLogout }: { profile: UserProfile | null; onLogout: () => void }) {
   const displayName = profile?.name || profile?.email || "未命名用户"
   const avatarChar = (displayName || "?").slice(0, 1).toUpperCase()
+  const email = profile?.email || "—"
+
+  const points = profile?.points
+  const totalPoints = points?.total ?? 0
+  const freeBalance = points?.freeBalance ?? 0
+  const freeQuota = points?.freeQuota ?? FREE_POINTS_QUOTA
+  const topUpBalance = points?.topupBalance ?? 0
 
   return (
-    <div className="settings-root">
-      <div className="settings-account">
-        <h2 className="settings-title">我的账户</h2>
-        <div className="settings-card">
-          <div className="settings-avatar">{avatarChar}</div>
-          <div className="settings-info">
-            <div className="settings-name">{displayName}</div>
-            <div className="settings-sub">
-              已绑定邮箱：{profile?.email || "—"}
+    <div className="account-root">
+      {/* 头像与信息卡片 */}
+      <div className="account-profile-card">
+        <div className="account-avatar-wrap">
+          <div className="account-avatar">{avatarChar}</div>
+          <span className="account-avatar-badge" title="编辑头像" />
+        </div>
+        <div className="account-info">
+          <div className="account-name">{displayName}</div>
+          <div className="account-email">{email}</div>
+        </div>
+        <div className="account-actions">
+          <button type="button" className="account-btn account-btn-profile" title="编辑资料">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+          </button>
+          <button type="button" className="account-btn account-btn-logout" onClick={onLogout} title="退出登录">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* 订阅与积分卡片 */}
+      <div className="account-subscription-card">
+        <div className="account-sub-header">
+          <span className="account-sub-title">言灵 基础版</span>
+        </div>
+        <div className="account-sub-divider" />
+        <div className="account-points-section">
+          <div>
+            <div className="account-points-row account-points-total">
+              <span className="account-points-label">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                </svg>
+                积分
+                <span className="account-info-icon" title="积分说明">ⓘ</span>
+              </span>
+              <span className="account-points-value">{totalPoints.toLocaleString()}</span>
+            </div>
+            <div className="account-points-row">
+              <span className="account-points-label">免费积分</span>
+              <span className="account-points-muted" title="剩余 / 共">{freeBalance.toLocaleString()} / {freeQuota.toLocaleString()}</span>
+            </div>
+            <div className="account-points-row">
+              <span className="account-points-label">
+                充值积分
+                <span className="account-info-icon" title="充值说明">ⓘ</span>
+              </span>
+              <span className="account-points-muted">{topUpBalance.toLocaleString()}</span>
             </div>
           </div>
+          <button type="button" className="account-topup-btn">+ 充值积分</button>
         </div>
-        <p className="settings-hint">更多账号信息与统计即将上线</p>
       </div>
-      <button type="button" className="settings-logout-btn" onClick={onLogout}>
-        退出登录
-      </button>
     </div>
   )
 }
 
-// ─── 页面组件：设置 ─────────────────────────────────────────────────────────
+// ─── 驭灵设置存储 key ───────────────────────────────────────────────────────
+const SETTINGS_KEY = "yuling:settings:v1"
+
+type SyncFreq = "realtime" | "15min" | "manual"
+
+interface YulingSettings {
+  language: string
+  highIntentReminder: boolean
+  productUpdates: boolean
+  syncFreq: SyncFreq
+}
+
+const defaultSettings: YulingSettings = {
+  language: "zh-CN",
+  highIntentReminder: false,
+  productUpdates: true,
+  syncFreq: "manual",
+}
+
+// ─── 页面组件：驭灵（设置）────────────────────────────────────────────────────
 function SettingsPage() {
+  const [settings, setSettings] = useState<YulingSettings>(defaultSettings)
+
+  useEffect(() => {
+    storage.get<YulingSettings>(SETTINGS_KEY).then(s => {
+      if (s) setSettings(prev => ({ ...prev, ...s }))
+    }).catch(() => {})
+  }, [])
+
+  const updateSettings = useCallback((patch: Partial<YulingSettings>) => {
+    setSettings(prev => {
+      const next = { ...prev, ...patch }
+      storage.set(SETTINGS_KEY, next).catch(() => {})
+      return next
+    })
+  }, [])
+
   return (
-    <div className="settings-root">
-      <div className="settings-account">
-        <h2 className="settings-title">设置</h2>
-        <div className="settings-card">
-          <div className="settings-info">
-            <div className="settings-name">通用设置</div>
-            <div className="settings-sub">更多偏好与计划配置即将上线</div>
+    <div className="yuling-root">
+      {/* 通用 */}
+      <section className="yuling-section">
+        <h3 className="yuling-section-title">通用</h3>
+        <div className="yuling-row">
+          <span className="yuling-row-label">语言</span>
+          <select
+            className="yuling-select"
+            value={settings.language}
+            onChange={e => updateSettings({ language: e.target.value })}
+          >
+            {LANGUAGES.map(lang => (
+              <option key={lang.code} value={lang.code}>{lang.label}</option>
+            ))}
+          </select>
+        </div>
+      </section>
+
+      {/* 通知偏好 */}
+      <section className="yuling-section">
+        <h3 className="yuling-section-title">通知偏好</h3>
+        <div className="yuling-row yuling-row-with-desc">
+          <div>
+            <span className="yuling-row-label">高意向评论提醒</span>
+            <p className="yuling-row-desc">有新的购买咨询或投诉时推送通知</p>
+          </div>
+          <label className="yuling-toggle">
+            <input
+              type="checkbox"
+              checked={settings.highIntentReminder}
+              disabled
+              readOnly
+            />
+            <span className="yuling-toggle-slider" />
+          </label>
+        </div>
+        <div className="yuling-row yuling-row-with-desc">
+          <div>
+            <span className="yuling-row-label">接收产品更新</span>
+            <p className="yuling-row-desc">新功能发布时通过邮件通知</p>
+          </div>
+          <label className="yuling-toggle">
+            <input
+              type="checkbox"
+              checked={settings.productUpdates}
+              onChange={e => updateSettings({ productUpdates: e.target.checked })}
+            />
+            <span className="yuling-toggle-slider" />
+          </label>
+        </div>
+      </section>
+
+      {/* 同步 */}
+      <section className="yuling-section">
+        <h3 className="yuling-section-title">同步</h3>
+        <div className="yuling-row yuling-row-col">
+          <span className="yuling-row-label">评论同步频率</span>
+          <div className="yuling-segmented yuling-segmented-disabled">
+            {(["realtime", "15min", "manual"] as const).map(k => (
+              <button
+                key={k}
+                type="button"
+                className={`yuling-segmented-btn ${settings.syncFreq === k ? "active" : ""}`}
+                disabled
+              >
+                {k === "realtime" ? "实时" : k === "15min" ? "15分钟" : "手动"}
+              </button>
+            ))}
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* 关于 */}
+      <section className="yuling-section">
+        <h3 className="yuling-section-title">关于</h3>
+        <button
+          type="button"
+          className="yuling-link-row"
+          onClick={() => {
+            if (typeof chrome !== "undefined" && chrome.tabs) {
+              chrome.tabs.create({ url: FEEDBACK_URL })
+            } else {
+              window.open(FEEDBACK_URL, "_blank")
+            }
+          }}
+        >
+          <span>意见反馈</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </button>
+        <div className="yuling-row">
+          <span className="yuling-row-label">当前版本</span>
+          <span className="yuling-row-value">v1.0.0</span>
+        </div>
+      </section>
     </div>
   )
 }
@@ -457,62 +642,87 @@ function SidePanel() {
     return () => clearTimeout(t)
   }, [])
 
-  // 登录后拉取一次账户信息，用于“我的账户”页面展示
+  const fetchUserProfile = useCallback(async () => {
+    if (!isLoggedIn) return
+    try {
+      const token = await storage.get<string>(AUTH_TOKEN_KEY)
+      const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+      if (!token) return
+      const res = await fetch(`${API_BASE}/auth/me`, {
+        headers: {
+          "x-tenant-id": tenantId,
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (!res.ok) {
+        if (res.status === 401) {
+          await storage.remove(AUTH_TOKEN_KEY)
+          setIsLoggedIn(false)
+        }
+        return
+      }
+      const data = await res.json()
+      const u = data?.user
+      const p = data?.points
+      if (u) {
+        setUserProfile({
+          id: u.id ?? "",
+          email: u.email ?? "",
+          name: u.name ?? "",
+          points: p ? {
+            freeBalance: Number(p.freeBalance) || 0,
+            freeQuota: Number(p.freeQuota) || 2000,
+            topupBalance: Number(p.topupBalance) || 0,
+            total: Number(p.total) || 0,
+          } : undefined,
+        })
+      }
+    } catch {
+      // 静默失败
+    }
+  }, [isLoggedIn])
+
   useEffect(() => {
     if (!isLoggedIn) {
       setUserProfile(null)
       return
     }
-    ;(async () => {
-      try {
-        const token = await storage.get<string>(AUTH_TOKEN_KEY)
-        const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
-        if (!token) return
-        const res = await fetch(`${API_BASE}/auth/me`, {
-          headers: {
-            "x-tenant-id": tenantId,
-            Authorization: `Bearer ${token}`,
-          },
-        })
-        if (!res.ok) {
-          if (res.status === 401) {
-            // token 失效，回到登录页
-            await storage.remove(AUTH_TOKEN_KEY)
-            setIsLoggedIn(false)
-          }
-          return
-        }
-        const data = await res.json()
-        const u = data?.user
-        if (u) {
-          setUserProfile({
-            id: u.id ?? "",
-            email: u.email ?? "",
-            name: u.name ?? "",
-          })
-        }
-      } catch {
-        // 静默失败，不影响主功能
-      }
-    })()
-  }, [isLoggedIn])
+    fetchUserProfile()
+  }, [isLoggedIn, fetchUserProfile])
 
-  // 初始化加载当前用户的已收藏存言（依赖 userProfile.id）
-  useEffect(() => {
+  // 从后端加载存言（依赖 userProfile.id）
+  const fetchSavedReplies = useCallback(async () => {
     if (!userProfile?.id) {
       setSavedReplies([])
       return
     }
-    ;(async () => {
-      try {
-        const key = getSavedRepliesKey(userProfile.id)
-        const list = (await storage.get<SavedReply[]>(key)) || []
-        setSavedReplies(list)
-      } catch {
-        setSavedReplies([])
-      }
-    })()
+    try {
+      const token = await storage.get<string>(AUTH_TOKEN_KEY)
+      const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+      if (!token) return
+      const res = await fetch(`${API_BASE}/saved-replies?limit=200`, {
+        headers: {
+          "x-tenant-id": tenantId,
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const data = await res.json()
+      const list = (data?.data ?? []).map((r: { id: string; text: string; fromComment: string; category: string; createdAt: string }) => ({
+        id: r.id,
+        text: r.text,
+        fromComment: r.fromComment ?? "",
+        createdAt: r.createdAt,
+        category: r.category ?? "默认",
+      }))
+      setSavedReplies(list)
+    } catch {
+      setSavedReplies([])
+    }
   }, [userProfile?.id])
+
+  useEffect(() => {
+    fetchSavedReplies()
+  }, [fetchSavedReplies])
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const listContainerRef = useRef<HTMLDivElement | null>(null)
@@ -740,7 +950,7 @@ function SidePanel() {
           postContent: post.postContent,
         },
       })
-      const errorMsg = result?.ok === false ? (result.error || "生成失败") : undefined
+      const errorMsg = result?.ok === false ? (result.error || result.message || "生成失败") : undefined
       setAiStates(prev => ({
         ...prev,
         [comment.id]: {
@@ -750,6 +960,9 @@ function SidePanel() {
           error: errorMsg,
         },
       }))
+      if (result?.ok && result?.suggestions?.length) {
+        fetchUserProfile() // 扣费成功，刷新积分展示
+      }
     } catch {
       setAiStates(prev => ({
         ...prev,
@@ -758,7 +971,7 @@ function SidePanel() {
     } finally {
       inflightRef.current.delete(comment.id)
     }
-  }, [])
+  }, [fetchUserProfile])
 
   const fillReply = useCallback(async (comment: Comment, text: string, index: number) => {
     setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: index } }))
@@ -774,6 +987,31 @@ function SidePanel() {
     } catch {
       await navigator.clipboard.writeText(text)
     }
+
+    // 乐观更新 + 后端同步：失败则回滚
+    const prevStatus = comment.status
+    setComments(prev =>
+      prev.map(c => (c.id === comment.id ? { ...c, status: "replied" } : c))
+    )
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "MARK_COMMENT_REPLIED",
+        payload: {
+          platformCommentId: comment.platformCommentId,
+          platform: "xiaohongshu",
+        },
+      })
+      if (!res?.ok) {
+        setComments(prev =>
+          prev.map(c => (c.id === comment.id ? { ...c, status: prevStatus } : c))
+        )
+      }
+    } catch {
+      setComments(prev =>
+        prev.map(c => (c.id === comment.id ? { ...c, status: prevStatus } : c))
+      )
+    }
+
     setTimeout(() => {
       setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: null } }))
     }, 2000)
@@ -782,30 +1020,64 @@ function SidePanel() {
   const toggleSaveReply = useCallback(
     async (comment: Comment, text: string) => {
       if (!userProfile?.id) return
-      setSavedReplies(prev => {
-        const from = comment.content.slice(0, 80)
-        const existing = prev.find(r => r.text === text && r.fromComment === from)
-        let next: SavedReply[]
-        if (existing) {
-          next = prev.filter(r => r.id !== existing.id)
-        } else {
-          const now = new Date().toISOString()
-          const item: SavedReply = {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            text,
-            fromComment: from,
-            createdAt: now,
-            category: "默认",
+      const from = comment.content.slice(0, 80)
+      const existing = savedReplies.find(r => r.text === text && r.fromComment === from)
+
+      if (existing) {
+        // 取消收藏：调用后端 DELETE
+        try {
+          const token = await storage.get<string>(AUTH_TOKEN_KEY)
+          const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+          if (token) {
+            await fetch(`${API_BASE}/saved-replies/${existing.id}`, {
+              method: "DELETE",
+              headers: {
+                "x-tenant-id": tenantId,
+                Authorization: `Bearer ${token}`,
+              },
+            })
           }
-          next = [item, ...prev]
+        } catch {
+          // 静默失败
         }
-        // 异步持久化，不阻塞 UI
-        const key = getSavedRepliesKey(userProfile.id)
-        storage.set(key, next).catch(() => {})
-        return next
-      })
+        setSavedReplies(prev => prev.filter(r => r.id !== existing.id))
+      } else {
+        // 收藏：调用后端 POST
+        try {
+          const token = await storage.get<string>(AUTH_TOKEN_KEY)
+          const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+          if (!token) return
+          const res = await fetch(`${API_BASE}/saved-replies`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-tenant-id": tenantId,
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              text,
+              fromCommentId: comment.platformCommentId,
+              fromCommentSnippet: from,
+              category: "默认",
+            }),
+          })
+          const data = await res.json()
+          if (data?.ok && data?.data) {
+            const d = data.data
+            setSavedReplies(prev => [{
+              id: d.id,
+              text: d.text,
+              fromComment: d.fromComment ?? from,
+              createdAt: d.createdAt,
+              category: d.category ?? "默认",
+            }, ...prev])
+          }
+        } catch {
+          // 静默失败
+        }
+      }
     },
-    [userProfile?.id]
+    [userProfile?.id, savedReplies]
   )
 
   const handleLogout = useCallback(async () => {
@@ -854,14 +1126,42 @@ function SidePanel() {
   return (
     <div className="panel">
       <div className="main-content">
-        {activeNav === "zhiyan" || activeNav === "cunyan" ? (
+        {(activeNav === "zhiyan" || activeNav === "cunyan" || activeNav === "account" || activeNav === "settings") ? (
           <header className="main-header">
             <span className="main-header-title">
-              {activeNav === "zhiyan"
-                ? "✦ 智言"
-                : activeNav === "cunyan"
-                ? "✧ 存言"
-                : null}
+              {activeNav === "zhiyan" && (
+                <>
+                  <svg className="main-header-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  智言
+                </>
+              )}
+              {activeNav === "cunyan" && (
+                <>
+                  <svg className="main-header-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                  </svg>
+                  存言
+                </>
+              )}
+              {activeNav === "account" && (
+                <>
+                  <svg className="main-header-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                  灵主
+                </>
+              )}
+              {activeNav === "settings" && (
+                <>
+                  <svg className="main-header-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5" />
+                  </svg>
+                  驭灵
+                </>
+              )}
             </span>
             {activeNav === "zhiyan" && (
               <button className="refresh-btn" onClick={fetchComments} disabled={loading} title="刷新评论">
@@ -916,7 +1216,7 @@ function SidePanel() {
           type="button"
           className="nav-avatar"
           onClick={() => setActiveNav("account")}
-          title="我的账户"
+          title="灵主"
         >
           我
         </button>
@@ -949,25 +1249,12 @@ function SidePanel() {
           type="button"
           className={`nav-btn ${activeNav === "settings" ? "active" : ""}`}
           onClick={() => setActiveNav("settings")}
-          title="设置"
+          title="驭灵"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path
-              d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5z"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M19.4 9a1.5 1.5 0 0 0 .3-1.6l-1-1.7a1.5 1.5 0 0 0-1.5-.7L15 5.4a5.3 5.3 0 0 0-2.1-1.2L12.5 2.5a1.5 1.5 0 0 0-1.5-1.2h-2a1.5 1.5 0 0 0-1.5 1.1L7 4.2a5.3 5.3 0 0 0-2.1 1.2L3 5.7a1.5 1.5 0 0 0-1.5.7l-1 1.7A1.5 1.5 0 0 0 .8 9l1.2 1a5.4 5.4 0 0 0 0 2l-1.2 1a1.5 1.5 0 0 0-.3 1.6l1 1.7a1.5 1.5 0 0 0 1.5.7l1.9-.3a5.3 5.3 0 0 0 2.1 1.2l.5 1.7a1.5 1.5 0 0 0 1.5 1.1h2a1.5 1.5 0 0 0 1.5-1.1l.5-1.7a5.3 5.3 0 0 0 2.1-1.2l1.9.3a1.5 1.5 0 0 0 1.5-.7l1-1.7a1.5 1.5 0 0 0-.3-1.6l-1.2-1a5.4 5.4 0 0 0 0-2l1.2-1z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5" />
           </svg>
-          <span>设置</span>
+          <span>驭灵</span>
         </button>
 
         {/* 这里原本还有一组旧的“智言/存言/设置”按钮，已删除，避免重复渲染 */}

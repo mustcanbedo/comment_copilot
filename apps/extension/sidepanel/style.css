@@ -32,7 +32,11 @@ body {
   background: var(--bg-page);
   color: var(--text-primary);
   width: 360px;
+  min-width: 320px;
+  max-width: 100%;
   min-height: 100vh;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* ==================== 页面一：未登录引导页 ==================== */
@@ -48,9 +52,18 @@ body {
 .login-inner {
   width: 100%;
   max-width: 320px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
+  text-align: center;
+}
+
+.login-inner p,
+.login-inner h1,
+.login-inner .login-subtitle {
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .login-logo-wrap {
@@ -153,6 +166,10 @@ body {
   font-size: 12px;
   color: var(--brand);
   text-decoration: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
 }
 
 .login-forgot:hover { text-decoration: underline; }
@@ -200,6 +217,108 @@ body {
 
 .login-terms { font-size: 11px; color: var(--text-ccc); }
 
+/* ==================== 法律文档弹窗 ==================== */
+.legal-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.legal-modal {
+  background: var(--bg-page);
+  border-radius: 12px;
+  max-width: 480px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.legal-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.legal-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.legal-modal-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.legal-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.legal-modal-body {
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.legal-section {
+  margin-bottom: 20px;
+}
+
+.legal-section:last-child { margin-bottom: 0; }
+
+.legal-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: var(--text);
+}
+
+.legal-section-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.legal-section-content p {
+  margin: 0 0 8px 0;
+}
+
+.legal-section-content p:last-child { margin-bottom: 0; }
+
+.legal-section-content ul {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+}
+
+.legal-section-content li {
+  margin-bottom: 4px;
+}
+
+.legal-section-content a {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.legal-section-content a:hover {
+  text-decoration: underline;
+}
+
 /* ==================== 页面二：已登录主界面 ==================== */
 .panel {
   display: flex;
@@ -242,8 +361,19 @@ body {
 
 .main-header-title {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 16px;
   font-weight: 800;
+  color: var(--brand);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-header-icon {
+  flex-shrink: 0;
   color: var(--brand);
 }
 
@@ -296,6 +426,9 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 筛选 Pill 栏 */
@@ -308,7 +441,8 @@ body {
 }
 
 .filter-btn {
-  padding: 6px 14px;
+  flex: 1;
+  padding: 6px 10px;
   border-radius: 99px;
   border: 1px solid var(--border-input);
   background: transparent;
@@ -317,6 +451,10 @@ body {
   cursor: pointer;
   color: var(--text-muted);
   transition: all 0.2s;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .filter-btn:hover { color: var(--text-primary); }
@@ -380,7 +518,12 @@ body {
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 6px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .comment-item-badge.hot {
@@ -616,7 +759,14 @@ body {
   transition: all 0.2s;
 }
 
-.nav-btn span { font-size: 9px; font-weight: 700; }
+.nav-btn span {
+  font-size: 9px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
 
 .nav-btn:hover { background: var(--nav-hover-bg); color: var(--brand); }
 
@@ -685,7 +835,17 @@ body {
   background: var(--bg-page);
 }
 
-.empty .hint { font-size: 12px; color: var(--text-ccc); }
+.empty .hint {
+  font-size: 12px;
+  color: var(--text-ccc);
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+.empty p {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
 
 .empty.cunyan-placeholder { flex: 1; }
 
@@ -721,20 +881,6 @@ body {
   background: #fff;
   border: 1px solid var(--border-light);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-}
-
-.settings-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--brand-gradient);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: 800;
-  color: #fff;
-  flex-shrink: 0;
 }
 
 .settings-info {
@@ -777,6 +923,423 @@ body {
 
 .settings-logout-btn:hover {
   background: #ffebee;
+}
+
+/* 驭灵设置页 */
+.yuling-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background: #f5f5f5;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.yuling-section {
+  background: #fff;
+  padding: 12px 16px 16px;
+  margin-bottom: 1px;
+}
+
+.yuling-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  padding: 0;
+}
+
+.yuling-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  gap: 12px;
+  min-width: 0;
+}
+
+.yuling-row > * {
+  min-width: 0;
+}
+
+.yuling-row:not(:last-child) {
+  border-bottom: 1px solid var(--border-light);
+}
+
+.yuling-row-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.yuling-row-label {
+  font-size: 14px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.yuling-row-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.yuling-row-with-desc {
+  align-items: center;
+}
+
+.yuling-row-with-desc > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.yuling-row-value {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.yuling-select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-input);
+  background: #fff;
+  font-size: 13px;
+  color: var(--text-primary);
+  min-width: 100px;
+}
+
+.yuling-segmented {
+  display: flex;
+  gap: 4px;
+  background: #f0f0f0;
+  padding: 4px;
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.yuling-segmented-btn {
+  flex: 1;
+  padding: 8px 6px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.yuling-segmented-btn.active {
+  background: #fff;
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
+.yuling-segmented-disabled .yuling-segmented-btn {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.yuling-segmented-disabled .yuling-segmented-btn.active {
+  opacity: 1;
+}
+
+.yuling-toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.yuling-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.yuling-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #ccc;
+  border-radius: 24px;
+  transition: 0.2s;
+}
+
+.yuling-toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.yuling-toggle input:checked + .yuling-toggle-slider {
+  background: var(--brand);
+}
+
+.yuling-toggle input:checked + .yuling-toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.yuling-toggle input:disabled + .yuling-toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.yuling-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.yuling-link-row:not(:last-child) {
+  border-bottom: 1px solid var(--border-light);
+}
+
+.yuling-link-row svg {
+  color: var(--text-muted);
+}
+
+/* 我的账户页 - 新设计 */
+.account-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  background: #f5f5f5;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.account-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 0;
+  background: #fff;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.account-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.account-avatar-badge {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #333;
+  border: 2px solid #fff;
+}
+
+.account-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.account-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-email {
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.account-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: #f0f0f0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.account-btn:hover {
+  background: #e8e8e8;
+}
+
+.account-btn-logout {
+  color: var(--brand);
+}
+
+.account-btn-logout:hover {
+  background: #fff0f2;
+}
+
+.account-subscription-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border-radius: 0;
+  background: #fff;
+  min-height: 0;
+}
+
+.account-sub-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.account-sub-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.account-sub-reset {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.account-sub-divider {
+  height: 1px;
+  background: #eee;
+  margin: 12px 0;
+  flex-shrink: 0;
+}
+
+.account-points-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 0;
+}
+
+.account-points-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+
+.account-points-total {
+  padding: 4px 0 4px;
+}
+
+.account-points-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.account-points-label svg {
+  color: #f5a623;
+}
+
+.account-points-value {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.account-points-muted {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.account-info-icon {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 2px;
+  cursor: help;
+}
+
+.account-topup-btn {
+  width: 100%;
+  height: 44px;
+  margin-top: 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.account-topup-btn:hover {
+  opacity: 0.92;
 }
 
 /* 存言页 */

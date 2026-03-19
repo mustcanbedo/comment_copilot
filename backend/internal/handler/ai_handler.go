@@ -3,22 +3,39 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"comment-copilot-web-backend/internal/repository"
+
 	"github.com/gin-gonic/gin"
 )
 
+const pointsPerCall = 1
+
 type AIHandler struct {
 	deepSeekAPIKey string
+	userRepo       *repository.UserRepository
 }
 
-func NewAIHandler(deepSeekAPIKey string) *AIHandler {
-	return &AIHandler{deepSeekAPIKey: deepSeekAPIKey}
+func NewAIHandler(deepSeekAPIKey string, userRepo *repository.UserRepository) *AIHandler {
+	return &AIHandler{deepSeekAPIKey: deepSeekAPIKey, userRepo: userRepo}
 }
 
 func (h *AIHandler) Reply(c *gin.Context) {
+	userIDVal, ok := c.Get("userId")
+	if !ok || userIDVal == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+		return
+	}
+	userID := userIDVal.(string)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+		return
+	}
+
 	tenantID := c.GetHeader("x-tenant-id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing x-tenant-id"})
@@ -38,6 +55,7 @@ func (h *AIHandler) Reply(c *gin.Context) {
 	}
 
 	if h.deepSeekAPIKey == "" {
+		// Mock 模式不扣费
 		c.JSON(http.StatusOK, gin.H{
 			"ok": true,
 			"suggestions": []string{
@@ -46,6 +64,22 @@ func (h *AIHandler) Reply(c *gin.Context) {
 				"谢谢支持，有问题可以继续留言。",
 			},
 		})
+		return
+	}
+
+	// 预扣费（事务 + 行锁），AI 失败时回退
+	deductResult, err := h.userRepo.DeductPoints(userID, pointsPerCall)
+	if err != nil {
+		if errors.Is(err, repository.ErrInsufficientPoints) {
+			c.JSON(http.StatusPaymentRequired, gin.H{
+				"ok":      false,
+				"error":   "insufficient_points",
+				"code":    "INSUFFICIENT_POINTS",
+				"message": "您的积分已耗尽，请充值。",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
 
@@ -91,11 +125,13 @@ func (h *AIHandler) Reply(c *gin.Context) {
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
 		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI service error"})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
 		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI service error"})
 		return
 	}
@@ -107,16 +143,35 @@ func (h *AIHandler) Reply(c *gin.Context) {
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil || len(out.Choices) == 0 {
-		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI service error"})
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
+		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "invalid AI response"})
+		return
+	}
+	if len(out.Choices) == 0 {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
+		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI returned empty choices"})
+		return
+	}
+
+	content := strings.TrimSpace(out.Choices[0].Message.Content)
+	if content == "" {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
+		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI returned empty content"})
 		return
 	}
 
 	var parsed struct {
 		Suggestions []string `json:"suggestions"`
 	}
-	if json.Unmarshal([]byte(out.Choices[0].Message.Content), &parsed) != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI service error"})
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
+		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "invalid AI JSON"})
+		return
+	}
+	if len(parsed.Suggestions) == 0 {
+		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
+		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI returned no suggestions"})
 		return
 	}
 

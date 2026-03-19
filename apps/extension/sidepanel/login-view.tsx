@@ -1,5 +1,7 @@
 import { useState } from "react"
 import { API_BASE } from "../constants"
+import { LegalModal } from "./legal-modal"
+import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal-content"
 import "./style.css"
 
 const AUTH_TOKEN_KEY = "authToken"
@@ -42,6 +44,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
+  const [legalModal, setLegalModal] = useState<"terms" | "privacy" | null>(null)
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -141,7 +144,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
                   onChange={e => setPassword(e.target.value)}
                   required
                 />
-                <a href="#" className="login-forgot">忘记密码？</a>
+                <button type="button" className="login-forgot">忘记密码？</button>
               </div>
               {error && <p className="login-error">{error}</p>}
               <button type="submit" className="login-btn" disabled={loading}>
@@ -158,8 +161,8 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
               </p>
               <p className="login-terms">
                 登录即表示同意{" "}
-                <a href="#" className="login-link">服务条款</a> 和{" "}
-                <a href="#" className="login-link">隐私政策</a>
+                <button type="button" className="login-link" onClick={() => setLegalModal("terms")}>服务条款</button> 和{" "}
+                <button type="button" className="login-link" onClick={() => setLegalModal("privacy")}>隐私政策</button>
               </p>
             </div>
           </>
@@ -207,8 +210,28 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
                   直接登录
                 </button>
               </p>
+              <p className="login-terms">
+                注册即表示同意{" "}
+                <button type="button" className="login-link" onClick={() => setLegalModal("terms")}>服务条款</button> 和{" "}
+                <button type="button" className="login-link" onClick={() => setLegalModal("privacy")}>隐私政策</button>
+              </p>
             </div>
           </>
+        )}
+
+        {legalModal === "terms" && (
+          <LegalModal
+            title={TERMS_OF_SERVICE.title}
+            sections={TERMS_OF_SERVICE.sections}
+            onClose={() => setLegalModal(null)}
+          />
+        )}
+        {legalModal === "privacy" && (
+          <LegalModal
+            title={PRIVACY_POLICY.title}
+            sections={PRIVACY_POLICY.sections}
+            onClose={() => setLegalModal(null)}
+          />
         )}
       </div>
     </div>

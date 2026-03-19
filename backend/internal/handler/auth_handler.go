@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"comment-copilot-web-backend/internal/db"
 	"comment-copilot-web-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -86,6 +87,12 @@ func (h *AuthHandler) Me(c *gin.Context) {
 			"id":    user.ID,
 			"email": user.Email,
 			"name":  user.FullName,
+		},
+		"points": gin.H{
+			"freeBalance":   user.FreePointsBalance,
+			"freeQuota":     db.FreePointsQuota,
+			"topupBalance":  user.TopupPointsBalance,
+			"total":         user.FreePointsBalance + user.TopupPointsBalance,
 		},
 	})
 }

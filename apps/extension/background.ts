@@ -77,6 +77,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 
+  if (message.type === "MARK_COMMENT_REPLIED") {
+    handleMarkCommentReplied(message.payload).then(sendResponse)
+    return true
+  }
+
   if (message.type === "GET_POST_CONTENT") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
@@ -117,6 +122,35 @@ async function handleCommentsCollected(payload: {
     return data
   } catch (err) {
     console.error("[CommentCopilot] ingest error:", err)
+    return { ok: false }
+  }
+}
+
+async function handleMarkCommentReplied(payload: {
+  platformCommentId: string
+  platform?: string
+}) {
+  const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
+  const token = await storage.get<string>("authToken")
+  if (!token) return { ok: false, error: "未登录" }
+
+  try {
+    const res = await fetch(`${API_BASE}/comments/mark-replied`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": tenantId,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        platformCommentId: payload.platformCommentId,
+        platform: payload.platform || "xiaohongshu",
+      }),
+    })
+    const data = await res.json()
+    return data
+  } catch (err) {
+    console.error("[CommentCopilot] mark-replied error:", err)
     return { ok: false }
   }
 }

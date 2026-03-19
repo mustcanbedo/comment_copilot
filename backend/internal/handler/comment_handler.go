@@ -3,36 +3,54 @@ package handler
 import (
 	"net/http"
 	"strconv"
-	"sync"
-	"time"
+
+	"comment-copilot-web-backend/internal/db"
+	"comment-copilot-web-backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
-type MemoryComment struct {
-	ID                string `json:"id"`
-	Platform          string `json:"platform"`
-	PlatformCommentID string `json:"platformCommentId"`
-	AuthorName        string `json:"authorName"`
-	Content           string `json:"content"`
-	IntentLevel       string `json:"intentLevel"`
-	Status            string `json:"status"`
-	CommentedAt       string `json:"commentedAt"`
-	PostURL           string `json:"postUrl"`
-	IsAuthorReply     bool   `json:"isAuthorReply"`
+type CommentHandler struct {
+	commentRepo *repository.CommentRepository
 }
 
-type CommentHandler struct{}
-
-func NewCommentHandler() *CommentHandler {
-	return &CommentHandler{}
+func NewCommentHandler(commentRepo *repository.CommentRepository) *CommentHandler {
+	return &CommentHandler{commentRepo: commentRepo}
 }
 
-var (
-	commentMu    sync.RWMutex
-	commentStore = map[string][]MemoryComment{}
-)
+type CommentResp struct {
+	ID                string  `json:"id"`
+	Platform          string  `json:"platform"`
+	PlatformCommentID string  `json:"platformCommentId"`
+	AuthorName        string  `json:"authorName"`
+	Content           string  `json:"content"`
+	IntentLevel       string  `json:"intentLevel"`
+	Status            string  `json:"status"`
+	CommentedAt       string  `json:"commentedAt"`
+	PostURL           string  `json:"postUrl"`
+	IsAuthorReply     bool    `json:"isAuthorReply"`
+	RepliedAt         *string `json:"repliedAt,omitempty"`
+}
+
+func commentToResp(c db.Comment) CommentResp {
+	r := CommentResp{
+		ID:                c.ID,
+		Platform:          c.Platform,
+		PlatformCommentID: c.PlatformCommentID,
+		AuthorName:        c.AuthorName,
+		Content:           c.Content,
+		IntentLevel:       c.IntentLevel,
+		Status:            c.Status,
+		CommentedAt:      c.CommentedAt.Format("2006-01-02T15:04:05.000Z"),
+		PostURL:           c.PostURL,
+		IsAuthorReply:     c.IsAuthorReply,
+	}
+	if c.RepliedAt != nil {
+		s := c.RepliedAt.Format("2006-01-02T15:04:05.000Z")
+		r.RepliedAt = &s
+	}
+	return r
+}
 
 func (h *CommentHandler) List(c *gin.Context) {
 	tenantID := c.GetHeader("x-tenant-id")
@@ -51,31 +69,22 @@ func (h *CommentHandler) List(c *gin.Context) {
 		limit = 200
 	}
 
+	postURL := c.Query("postUrl")
 	intent := c.Query("intent")
 	status := c.Query("status")
 
-	commentMu.RLock()
-	rows := append([]MemoryComment(nil), commentStore[tenantID]...)
-	commentMu.RUnlock()
-
-	filtered := make([]MemoryComment, 0, len(rows))
-	for _, row := range rows {
-		if row.IsAuthorReply {
-			continue
-		}
-		if intent != "" && row.IntentLevel != intent {
-			continue
-		}
-		if status != "" && row.Status != status {
-			continue
-		}
-		filtered = append(filtered, row)
-		if len(filtered) >= limit {
-			break
-		}
+	list, err := h.commentRepo.List(tenantID, postURL, intent, status, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "data": filtered, "total": len(filtered)})
+	resp := make([]CommentResp, len(list))
+	for i := range list {
+		resp[i] = commentToResp(list[i])
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": resp, "total": len(resp)})
 }
 
 func (h *CommentHandler) Ingest(c *gin.Context) {
@@ -101,50 +110,51 @@ func (h *CommentHandler) Ingest(c *gin.Context) {
 		return
 	}
 
-	commentMu.Lock()
-	defer commentMu.Unlock()
-
-	exists := map[string]struct{}{}
-	for _, row := range commentStore[tenantID] {
-		key := row.Platform + "::" + row.PlatformCommentID
-		exists[key] = struct{}{}
+	items := make([]repository.IngestItem, len(req.Comments))
+	for i := range req.Comments {
+		items[i] = repository.IngestItem{
+			PlatformCommentID: req.Comments[i].PlatformCommentID,
+			AuthorName:        req.Comments[i].AuthorName,
+			Content:           req.Comments[i].Content,
+			CommentedAt:       req.Comments[i].CommentedAt,
+			PostURL:           req.Comments[i].PostURL,
+			IsAuthorReply:     req.Comments[i].IsAuthorReply,
+		}
 	}
 
-	saved := 0
-	skipped := 0
-
-	for _, item := range req.Comments {
-		key := req.Platform + "::" + item.PlatformCommentID
-		if _, ok := exists[key]; ok {
-			skipped++
-			continue
-		}
-
-		parsedTime := item.CommentedAt
-		if _, err := time.Parse(time.RFC3339, item.CommentedAt); err != nil {
-			parsedTime = time.Now().Format(time.RFC3339)
-		}
-
-		status := "pending"
-		if item.IsAuthorReply {
-			status = "author"
-		}
-
-		commentStore[tenantID] = append(commentStore[tenantID], MemoryComment{
-			ID:                uuid.NewString(),
-			Platform:          req.Platform,
-			PlatformCommentID: item.PlatformCommentID,
-			AuthorName:        item.AuthorName,
-			Content:           item.Content,
-			IntentLevel:       "cold",
-			Status:            status,
-			CommentedAt:       parsedTime,
-			PostURL:           item.PostURL,
-			IsAuthorReply:     item.IsAuthorReply,
-		})
-		exists[key] = struct{}{}
-		saved++
+	saved, skipped, err := h.commentRepo.UpsertFromIngest(tenantID, req.Platform, items)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "saved": saved, "skipped": skipped})
+}
+
+func (h *CommentHandler) MarkReplied(c *gin.Context) {
+	tenantID := c.GetHeader("x-tenant-id")
+	if tenantID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing x-tenant-id"})
+		return
+	}
+
+	var req struct {
+		PlatformCommentID string `json:"platformCommentId" binding:"required"`
+		Platform          string `json:"platform"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	platform := req.Platform
+	if platform == "" {
+		platform = "xiaohongshu"
+	}
+
+	if err := h.commentRepo.MarkReplied(tenantID, platform, req.PlatformCommentID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
