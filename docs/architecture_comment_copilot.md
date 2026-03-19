@@ -2,10 +2,10 @@
 
 > 目标：以最小的基础设施负担，快速验证「评论采集 → AI 回复建议 → 潜客转化」核心价值链路。优先选择托管服务，消除运维负担。
 
-最后更新：2026-03-13（v2.0 Serverless 版）  
-文档目前以 **Next.js Serverless 架构** 为主，插件 + Go 后端的最新实现见下方「附录 A」。
+最后更新：2026-03-15（v2.0 MVP 版）  
+**当前实现**：Chrome 插件 + **Go 后端**（Gin + GORM）+ PostgreSQL。Next.js/Neon 已移除。
 
-- **已实现架构**（Next.js 版本的接口、目录、数据流）：见 [architecture-as-built.md](architecture-as-built.md)。
+- **已实现架构**（API、目录、数据流、积分、存言、租户隔离）：见 [architecture-as-built.md](architecture-as-built.md)。
 - **使用逻辑**（插件为主、Web 为数据分析、身份打通）：见 [usage-flow.md](usage-flow.md)。
 
 ---

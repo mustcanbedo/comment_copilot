@@ -1,6 +1,8 @@
 # Comment Copilot — Code Review
 
-> 基于当前仓库的静态审查，侧重安全、健壮性、一致性与可维护性。审查时间：2026-03-13。
+> 基于当前仓库的静态审查，侧重安全、健壮性、一致性与可维护性。
+
+**注意**：本文档部分结论基于早期 Next.js 架构。当前后端已迁移至 **Go + Gin + GORM**，最新实现见 [architecture-as-built.md](architecture-as-built.md)。租户隔离（RequireTenantMatch）、积分扣费、存言 CRUD、SavedReply Delete 的 tenant 校验等已按审查建议实现。
 
 ---
 

@@ -4,7 +4,9 @@
 
 数据库：Neon DB（Serverless PostgreSQL），ORM：Drizzle ORM。
 
-最后更新：2026-03-13（v2.0 MVP 简化版）
+最后更新：2026-03-15（v2.0 MVP 简化版）
+
+> **实现说明**：当前项目使用 GORM + 原生 SQL 迁移（`backend/migrations/`），非 Drizzle。下方 Drizzle Schema 为设计参考，实际表结构以迁移文件为准。
 
 ---
 
@@ -50,7 +52,7 @@ export const tenants = pgTable('tenants', {
 
 ### 2.2 Users（用户）
 
-MVP 阶段简化：移除 `roles` / `user_roles` 表，`role` 字段直接存在 `users` 表：
+MVP 阶段简化：移除 `roles` / `user_roles` 表，`role` 字段直接存在 `users` 表。**积分字段**（migration 0004）：
 
 ```typescript
 export const users = pgTable('users', {
@@ -60,6 +62,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash'),
   fullName: text('full_name').default(''),
   role: text('role').default('owner').notNull(), // 'owner' | 'editor' | 'viewer'
+  freePointsBalance: bigint('free_points_balance').default(2000).notNull(),  // 免费积分，注册送 2000
+  topupPointsBalance: bigint('topup_points_balance').default(0).notNull(), // 充值积分，CHECK 约束见 migration 0004
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 ```
@@ -184,7 +188,28 @@ export const selectorConfigs = pgTable('selector_configs', {
 })
 ```
 
-### 2.9 Audit Logs（操作审计）
+### 2.9 Saved Replies（存言）
+
+收藏的 AI 回复，供快速复用（migration 0003）：
+
+```typescript
+export const savedReplies = pgTable('saved_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tenantId: uuid('tenant_id').notNull(),
+  text: text('text').notNull(),
+  fromCommentId: text('from_comment_id'),
+  fromCommentSnippet: text('from_comment_snippet'),
+  category: text('category').default('默认').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  idxUser: index('idx_saved_replies_user').on(t.userId),
+  idxTenant: index('idx_saved_replies_tenant').on(t.tenantId),
+}))
+```
+
+### 2.10 Audit Logs（操作审计）
 
 ```typescript
 export const auditLogs = pgTable('audit_logs', {
@@ -205,9 +230,10 @@ export const auditLogs = pgTable('audit_logs', {
 ## 3. 精简后的 ER 关系
 
 ```
-tenants ──┬── users
+tenants ──┬── users（含 free_points_balance, topup_points_balance）
           ├── accounts ── comments ── ai_replies
           │                       └── leads
+          ├── saved_replies（user_id + tenant_id）
           ├── ai_call_logs
           ├── audit_logs
           └── selector_configs（全局，无 tenant_id）
@@ -247,14 +273,24 @@ tenants ──┬── users
 
 ## 6. Migration 策略
 
-使用 `drizzle-kit` 管理 migration：
+当前使用 **GORM + 原生 SQL 迁移**（`backend/migrations/`）：
+
+| 文件 | 说明 |
+|------|------|
+| `0001_init.sql` | 初始化 tenants、users、comments 等 |
+| `0002_users_email_to_phone_drop_role.sql` | 用户表字段调整 |
+| `0003_comments_saved_replies.sql` | comments 表补充、saved_replies 表 |
+| `0004_users_points.sql` | users 积分字段、CHECK 约束、存量补发 |
+
+**执行方式**：
 
 ```bash
-# 生成 migration 文件
-npm run db:generate
+# 方式一：使用 migrate 命令（需配置 DATABASE_URL）
+cd backend
+go run ./cmd/migrate
 
-# 执行 migration（连接 Neon DB）
-npm run db:migrate
+# 方式二：config.yaml 中 auto_migrate: true，GORM 自动建表（仅表结构，不含 0004 的 CHECK 约束）
+# 生产建议手动执行 SQL 文件
 ```
 
-Migration 文件纳入 Git 版本控制，每次 Schema 变更都生成新的 migration 文件，不直接修改已有文件。
+**存量用户补发**：`backend/scripts/backfill_points.sql` 为存量用户补发 2000 免费积分。

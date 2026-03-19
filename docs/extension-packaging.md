@@ -52,9 +52,11 @@ npm run package
 
 1. **后端地址**：插件请求的 API 地址由 `.env.production` 里的 `PLASMO_PUBLIC_API_URL` 决定。打包前确认已填写正确的后端地址（本地开发用 `http://localhost:3000/api`，线上用部署后的域名）。
 
-2. **登录**：首次使用需注册账号并登录，Token 会保存在插件本地 storage 中，之后自动携带。
+2. **意见反馈**：Chrome 商店要求可公开访问的支持链接。默认跳转 `https://github.com/mustcanbedo/yanling/issues`，可在 `.env.production` 中配置 `PLASMO_PUBLIC_GITHUB_REPO` 或 `PLASMO_PUBLIC_FEEDBACK_URL` 自定义。
 
-3. **Chrome 版本**：建议使用较新版本的 Chrome（支持 Manifest V3 和 Side Panel）。
+3. **登录**：首次使用需注册账号并登录，Token 会保存在插件本地 storage 中，之后自动携带。
+
+4. **Chrome 版本**：建议使用较新版本的 Chrome（支持 Manifest V3 和 Side Panel）。
 
 ---
 

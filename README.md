@@ -61,15 +61,17 @@ Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助小�
 comment_copilot/
 ├── backend/                    # Go 后端
 │   ├── cmd/server/main.go      # 入口
+│   ├── cmd/migrate/main.go     # 迁移入口（执行 migrations）
 │   ├── internal/
 │   │   ├── handler/            # HTTP 处理器
 │   │   ├── service/            # 业务逻辑
 │   │   ├── repository/         # 数据库访问
-│   │   ├── middleware/         # 鉴权中间件
+│   │   ├── middleware/         # 鉴权、租户校验
 │   │   ├── server/             # 路由注册
 │   │   ├── db/                 # DB 连接与模型
 │   │   └── config/             # 配置加载
-│   ├── migrations/             # SQL 迁移文件
+│   ├── migrations/             # SQL 迁移文件（0001~0004）
+│   ├── scripts/                # 数据脚本（如 backfill_points.sql）
 │   ├── config.yaml             # 运行配置（本地）
 │   └── config.yaml.example     # 配置模板
 │
@@ -77,10 +79,13 @@ comment_copilot/
 │   ├── contents/
 │   │   └── xiaohongshu.ts      # 小红书 content script
 │   ├── sidepanel/
-│   │   ├── index.tsx           # 侧边栏 UI（虚拟列表）
+│   │   ├── index.tsx           # 侧边栏 UI（智言、存言、灵主、驭灵）
+│   │   ├── login-view.tsx      # 登录/注册页
+│   │   ├── legal-content.tsx   # 服务条款、隐私政策
+│   │   ├── legal-modal.tsx     # 法律文档弹窗
 │   │   └── style.css
 │   ├── auth/
-│   │   ├── Login.tsx           # 登录组件（备用，供后续插件内登录）
+│   │   ├── Login.tsx           # 登录组件（备用）
 │   │   └── Register.tsx        # 注册组件（备用）
 │   └── background.ts           # 消息路由 & API 调用
 │
@@ -159,10 +164,16 @@ auto_migrate: true   # 首次启动设为 true，自动建表
 
 积分系统：首次部署需执行 `migrations/0004_users_points.sql` 添加积分字段；若使用 `auto_migrate: true`，GORM 会自动添加列，但建议手动执行该迁移以添加负余额 CHECK 约束。
 
-### apps/extension/.env.development
+### apps/extension 环境变量
 
 ```env
+# .env.development（本地开发）
 PLASMO_PUBLIC_API_URL=http://localhost:3000/api
+
+# .env.production（生产打包）
+PLASMO_PUBLIC_API_URL=https://your-api-domain.com/api
+# 意见反馈用 GitHub 仓库（可选，默认 mustcanbedo/yanling）
+# PLASMO_PUBLIC_GITHUB_REPO=owner/yanling
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 > 博主日常以**插件**为主；Go 后端提供 API 服务。
 
-最后更新：2026-03-14
+最后更新：2026-03-15
 
 ---
 
@@ -67,11 +67,12 @@ flowchart LR
 
 | 端 | 身份方式 | 说明 |
 |----|----------|------|
-| **插件** | JWT Bearer Token | 登录后存入 `@plasmohq/storage`，每次请求从 storage 读取并附加到请求头 |
+| **插件** | JWT Bearer Token + x-tenant-id | 登录后存入 `@plasmohq/storage`，每次请求附加 `Authorization` 和 `x-tenant-id` |
 
 - 注册/登录通过 Go 后端 `/api/auth/register` 和 `/api/auth/login` 完成。
-- 所有业务 API 需在请求头携带 `Authorization: Bearer <token>`。
+- 所有业务 API 需在请求头携带 `Authorization: Bearer <token>` 和 `x-tenant-id`（租户校验）。
 - Token 与租户绑定，所有数据按 `tenant_id` 隔离。
+- **积分**：注册送 2000 免费积分，AI 调用每次扣 1 积分，不足返回 402。
 
 ---
 
@@ -80,6 +81,8 @@ flowchart LR
 - **评论从哪里来**：仅来自**插件**。用户打开小红书笔记页，插件通过 DOM 解析采集评论并上报到 `POST /api/ingest/comments`，写入 PostgreSQL，归属当前 token 对应的租户。
 - **评论到哪里去**：插件侧边栏调用 `GET /api/comments?postUrl=<当前页URL>`，只展示当前笔记的评论并触发 AI 回复。
 - **人设从哪里来**：通过 `POST /api/settings/persona` 保存，存在该租户的 `tenants.persona`。插件调用 `POST /api/ai/reply` 时，后端按 token 对应租户读取 persona 生成回复。
+- **存言**：用户可将 AI 回复收藏到「存言」，调用 `POST /api/saved-replies` 保存，`GET /api/saved-replies` 按分类/搜索查询，供快速复用。
+- **法律与反馈**：登录/注册页底部有服务条款、隐私政策入口；驭灵 → 关于 → 意见反馈跳转 GitHub Issues。
 
 ---
 
