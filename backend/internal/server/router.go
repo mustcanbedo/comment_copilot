@@ -10,17 +10,17 @@ import (
 )
 
 type RouterDeps struct {
-	AuthSecret   string
-	AuthRepo     *repository.AuthRepository
-	CORSOrigins  []string // 空则允许 *，生产建议配置 chrome-extension://<id> 等
+	AuthSecret  string
+	AuthRepo    *repository.AuthRepository
+	CORSOrigins []string // 空则允许 *，生产建议配置 chrome-extension://<id> 等
 
-	HealthHandler      *handler.HealthHandler
-	AuthHandler        *handler.AuthHandler
-	CommentHandler     *handler.CommentHandler
-	SavedReplyHandler  *handler.SavedReplyHandler
-	SelectorHandler    *handler.SelectorHandler
-	AIHandler          *handler.AIHandler
-	PersonaHandler     *handler.PersonaHandler
+	HealthHandler     *handler.HealthHandler
+	AuthHandler       *handler.AuthHandler
+	CommentHandler    *handler.CommentHandler
+	SavedReplyHandler *handler.SavedReplyHandler
+	SelectorHandler   *handler.SelectorHandler
+	AIHandler         *handler.AIHandler
+	PersonaHandler    *handler.PersonaHandler
 }
 
 func NewRouter(deps RouterDeps) *gin.Engine {
@@ -41,12 +41,12 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	{
 		api.POST("/auth/login", deps.AuthHandler.Login(deps.AuthSecret))
 		api.POST("/auth/logout", deps.AuthHandler.Logout)
+		api.POST("/auth/register", deps.AuthHandler.Register)
 
 		protected := api.Group("")
 		protected.Use(middleware.RequireAuth(deps.AuthSecret))
 
 		protected.GET("/health", deps.HealthHandler.Get)
-		protected.POST("/auth/register", deps.AuthHandler.Register)
 		protected.GET("/auth/me", deps.AuthHandler.Me)
 		protected.GET("/auth/session", deps.AuthHandler.CompatSession)
 		protected.POST("/auth/session", deps.AuthHandler.CompatSession)
