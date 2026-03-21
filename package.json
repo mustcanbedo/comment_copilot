@@ -2,10 +2,10 @@
   "name": "comment-copilot-monorepo",
   "private": true,
   "scripts": {
-    "dev:extension": "cd apps/extension && pnpm dev",
-    "dev:api": "cd services/api && pnpm start:dev",
-    "dev:api-go": "cd services/api-go && go run ./cmd/server",
-    "dev:web-backend": "cd web/backend-go && go run ./cmd/server"
+    "dev": "cd apps/extension && npm run dev",
+    "dev:prod": "cd apps/extension && npm run dev:prod",
+    "dev:backend": "cd backend && go run ./cmd/server",
+    "build": "cd apps/extension && npm run build"
   },
   "workspaces": [
     "apps/*",

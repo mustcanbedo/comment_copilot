@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Storage } from "@plasmohq/storage"
-import { API_BASE, DEFAULT_TENANT_ID, FEEDBACK_URL } from "../constants"
+import { API_BASE, DEFAULT_TENANT_ID, FEEDBACK_URL, YANLING_XHS_SELF_NICK_STORAGE_KEY } from "../constants"
 import LoginView, { AUTH_TOKEN_KEY } from "./login-view"
 import "./style.css"
 
@@ -136,7 +136,10 @@ function mergeWithDb(pageComments: PageComment[], dbMap: Map<string, Comment>): 
 
 // ─── 页面组件：智言（评论列表 + AI 回复） ───────────────────────────────────
 function ZhiyanPage(props: {
-  comments: Comment[]
+  /** 全部评论（统计区用） */
+  allComments: Comment[]
+  /** 筛选后条数（用于「筛选下为空」提示） */
+  filteredCount: number
   loading: boolean
   switching: boolean
   filter: Filter
@@ -154,9 +157,16 @@ function ZhiyanPage(props: {
   hotCount: number
   pendingCount: number
   setFilter: (f: Filter) => void
+  /** 页面读不到登录用户身份时，引导去灵主补充昵称（可选） */
+  xhsNickHint?: {
+    show: boolean
+    onGoToAccount: () => void
+    onDismiss: () => void
+  }
 }) {
   const {
-    comments,
+    allComments,
+    filteredCount,
     loading,
     switching,
     filter,
@@ -174,13 +184,14 @@ function ZhiyanPage(props: {
     hotCount,
     pendingCount,
     setFilter,
+    xhsNickHint,
   } = props
 
   return (
     <>
       <div className="stats-row">
         <div className="stat-item">
-          <span className="stat-num">{comments.length}</span>
+          <span className="stat-num">{allComments.length}</span>
           <span className="stat-label">全部</span>
         </div>
         <div className="stat-item hot">
@@ -205,7 +216,23 @@ function ZhiyanPage(props: {
         ))}
       </div>
 
-      {!loading && comments.length === 0 ? (
+      {xhsNickHint?.show && (
+        <div className="zhiyan-xhs-banner" role="status">
+          <p>
+            未能识别当前页登录身份，您自己的评论可能进列表。可到<strong>灵主</strong>补充与主页一致的昵称（多数情况无需填写）。
+          </p>
+          <div className="zhiyan-xhs-banner-actions">
+            <button type="button" className="zhiyan-xhs-banner-btn primary" onClick={xhsNickHint.onGoToAccount}>
+              去灵主填写
+            </button>
+            <button type="button" className="zhiyan-xhs-banner-btn" onClick={xhsNickHint.onDismiss}>
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!loading && allComments.length === 0 ? (
         <div className="empty">
           {switching ? (
             <>
@@ -218,6 +245,11 @@ function ZhiyanPage(props: {
               <p className="hint">打开小红书笔记页面，评论会自动同步</p>
             </>
           )}
+        </div>
+      ) : !loading && filteredCount === 0 ? (
+        <div className="empty">
+          <p>当前筛选下暂无评论</p>
+          <p className="hint">试试切换到「全部」查看</p>
         </div>
       ) : (
         <div className="comment-list" ref={listContainerRef}>
@@ -343,8 +375,9 @@ function CunyanPage(props: {
   setCategory: (c: string) => void
   search: string
   setSearch: (v: string) => void
+  onDelete?: (id: string) => void
 }) {
-  const { savedReplies, category, setCategory, search, setSearch } = props
+  const { savedReplies, category, setCategory, search, setSearch, onDelete } = props
   const categories = Array.from(new Set(savedReplies.map(r => r.category || "未分类")))
   categories.sort()
 
@@ -388,14 +421,31 @@ function CunyanPage(props: {
         <div className="cunyan-list">
           {filtered.map(item => (
             <div key={item.id} className="cunyan-item">
-              <div className="cunyan-text">{item.text}</div>
-              <div className="cunyan-meta">
-                <span className="cunyan-category">{item.category || "未分类"}</span>
-                <span className="cunyan-time">
-                  {new Date(item.createdAt).toLocaleString()}
-                </span>
+              <div className="cunyan-item-main">
+                <div className="cunyan-text">{item.text}</div>
+                <div className="cunyan-meta">
+                  <span className="cunyan-category">{item.category || "未分类"}</span>
+                  <span className="cunyan-time">
+                    {new Date(item.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <div className="cunyan-source">来自评论：{item.fromComment}</div>
               </div>
-              <div className="cunyan-source">来自评论：{item.fromComment}</div>
+              {onDelete && (
+                <button
+                  type="button"
+                  className="cunyan-delete-btn"
+                  onClick={() => onDelete(item.id)}
+                  title="删除"
+                  aria-label="删除"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -407,7 +457,41 @@ function CunyanPage(props: {
 const FREE_POINTS_QUOTA = 2000
 
 // ─── 页面组件：我的账户 ─────────────────────────────────────────────────────
-function AccountPage({ profile, onLogout }: { profile: UserProfile | null; onLogout: () => void }) {
+function AccountPage({
+  profile,
+  onLogout,
+  onXhsNickSaved,
+}: {
+  profile: UserProfile | null
+  onLogout: () => void
+  /** 传入已保存的昵称（trim 后），空字符串表示用户清空了补充项 */
+  onXhsNickSaved?: (trimmedNick: string) => void
+}) {
+  const [xhsNickInput, setXhsNickInput] = useState("")
+  const [xhsSaveStatus, setXhsSaveStatus] = useState<"idle" | "saved">("idle")
+
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return
+    chrome.storage.local.get([YANLING_XHS_SELF_NICK_STORAGE_KEY], r => {
+      const v = r[YANLING_XHS_SELF_NICK_STORAGE_KEY]
+      if (typeof v === "string" && v.trim()) {
+        setXhsNickInput(v.trim())
+      } else {
+        setXhsNickInput((profile?.name ?? "").trim())
+      }
+    })
+  }, [profile?.id, profile?.name])
+
+  const saveXhsNick = useCallback(() => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return
+    const v = xhsNickInput.trim()
+    chrome.storage.local.set({ [YANLING_XHS_SELF_NICK_STORAGE_KEY]: v }, () => {
+      setXhsSaveStatus("saved")
+      onXhsNickSaved?.(v)
+      setTimeout(() => setXhsSaveStatus("idle"), 2000)
+    })
+  }, [xhsNickInput, onXhsNickSaved])
+
   const displayName = profile?.name || profile?.email || "未命名用户"
   const avatarChar = (displayName || "?").slice(0, 1).toUpperCase()
   const email = profile?.email || "—"
@@ -443,6 +527,23 @@ function AccountPage({ profile, onLogout }: { profile: UserProfile | null; onLog
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" y1="12" x2="9" y2="12" />
             </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="account-xhs-card">
+        <div className="account-xhs-title">小红书昵称（可选补充）</div>
+        <div className="account-xhs-row">
+          <input
+            type="text"
+            className="account-xhs-input"
+            placeholder="例如：像我这样的人"
+            value={xhsNickInput}
+            onChange={e => setXhsNickInput(e.target.value)}
+            autoComplete="off"
+          />
+          <button type="button" className="account-xhs-save" onClick={saveXhsNick}>
+            {xhsSaveStatus === "saved" ? "已保存" : "保存"}
           </button>
         </div>
       </div>
@@ -509,7 +610,7 @@ function SettingsPage() {
 
   useEffect(() => {
     storage.get<YulingSettings>(SETTINGS_KEY).then(s => {
-      if (s) setSettings(prev => ({ ...prev, ...s }))
+      if (s) setSettings({ ...defaultSettings, ...s })
     }).catch(() => {})
   }, [])
 
@@ -635,6 +736,71 @@ function SidePanel() {
   const [savedReplies, setSavedReplies] = useState<SavedReply[]>([])
   const [cunyanCategory, setCunyanCategory] = useState<string>("全部")
   const [cunyanSearch, setCunyanSearch] = useState<string>("")
+  const [panelToast, setPanelToast] = useState<string | null>(null)
+  /** 由 content 脚本检测：页面读不到登录用户且未在灵主补充昵称 */
+  const [xhsNeedSupplementHint, setXhsNeedSupplementHint] = useState(false)
+  const xhsNeedSupplementHintRef = useRef(false)
+  xhsNeedSupplementHintRef.current = xhsNeedSupplementHint
+  const [xhsBannerDismissed, setXhsBannerDismissed] = useState(false)
+
+  /** 仅迁移驭灵旧版「小红书昵称」到 chrome.local（不再用后端账号名自动写入，避免与真实小红书昵称不一致） */
+  const syncXhsNickFromAccountAndLegacy = useCallback(async () => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return
+    const r = await new Promise<Record<string, unknown>>(res => {
+      chrome.storage.local.get([YANLING_XHS_SELF_NICK_STORAGE_KEY], x => res(x as Record<string, unknown>))
+    })
+    const cur = typeof r[YANLING_XHS_SELF_NICK_STORAGE_KEY] === "string" ? r[YANLING_XHS_SELF_NICK_STORAGE_KEY].trim() : ""
+    if (cur) return
+    try {
+      const leg = await storage.get<Record<string, unknown>>(SETTINGS_KEY)
+      const x = leg?.xhsSelfNickname
+      if (typeof x === "string" && x.trim()) {
+        await new Promise<void>(res => {
+          chrome.storage.local.set({ [YANLING_XHS_SELF_NICK_STORAGE_KEY]: x.trim() }, () => res())
+        })
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userProfile?.id) {
+      setXhsBannerDismissed(false)
+      return
+    }
+    try {
+      setXhsBannerDismissed(localStorage.getItem(`yanling_dismiss_xhs_hint_${userProfile.id}`) === "1")
+    } catch {
+      setXhsBannerDismissed(false)
+    }
+  }, [userProfile?.id])
+
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return
+    const fn: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, area) => {
+      if (area !== "local" || !changes[YANLING_XHS_SELF_NICK_STORAGE_KEY]) return
+      const nv = changes[YANLING_XHS_SELF_NICK_STORAGE_KEY].newValue
+      if (typeof nv === "string" && nv.trim()) setXhsNeedSupplementHint(false)
+    }
+    chrome.storage.onChanged.addListener(fn)
+    return () => chrome.storage.onChanged.removeListener(fn)
+  }, [])
+
+  /** 供消息回调读取最新列表，避免闭包陈旧 */
+  const commentsRef = useRef<Comment[]>([])
+  commentsRef.current = comments
+
+  /** 页面滚动联动：当前筛选下找不到目标评论时先切回「全部」，再由此 ref 触发二次滚动 */
+  const pendingScrollToPlatformIdRef = useRef<string | null>(null)
+  /** 因滚动联动自动切到「全部」时，跳过「切筛选就滚回顶部」避免冲掉定位 */
+  const skipNextFilterScrollResetRef = useRef(false)
+
+  useEffect(() => {
+    if (!panelToast) return
+    const t = setTimeout(() => setPanelToast(null), 3500)
+    return () => clearTimeout(t)
+  }, [panelToast])
 
   useEffect(() => {
     storage.get<string>(AUTH_TOKEN_KEY).then(token => setIsLoggedIn(!!token)).catch(() => setIsLoggedIn(false))
@@ -642,7 +808,7 @@ function SidePanel() {
     return () => clearTimeout(t)
   }, [])
 
-  const fetchUserProfile = useCallback(async () => {
+  const fetchUserProfile = useCallback(async (): Promise<void> => {
     if (!isLoggedIn) return
     try {
       const token = await storage.get<string>(AUTH_TOKEN_KEY)
@@ -676,11 +842,12 @@ function SidePanel() {
             total: Number(p.total) || 0,
           } : undefined,
         })
+        await syncXhsNickFromAccountAndLegacy()
       }
     } catch {
       // 静默失败
     }
-  }, [isLoggedIn])
+  }, [isLoggedIn, syncXhsNickFromAccountAndLegacy])
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -724,6 +891,32 @@ function SidePanel() {
     fetchSavedReplies()
   }, [fetchSavedReplies])
 
+  const deleteSavedReply = useCallback(async (id: string) => {
+    try {
+      const token = await storage.get<string>(AUTH_TOKEN_KEY)
+      const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+      if (!token) {
+        setPanelToast("请先登录")
+        return
+      }
+      const res = await fetch(`${API_BASE}/saved-replies/${id}`, {
+        method: "DELETE",
+        headers: {
+          "x-tenant-id": tenantId,
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (res.ok) {
+        setSavedReplies(prev => prev.filter(r => r.id !== id))
+        setPanelToast("已删除")
+      } else {
+        setPanelToast("删除失败，请重试")
+      }
+    } catch {
+      setPanelToast("网络错误，请稍后重试")
+    }
+  }, [])
+
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const listContainerRef = useRef<HTMLDivElement | null>(null)
   const itemHeightsRef = useRef<Record<string, number>>({})
@@ -731,17 +924,48 @@ function SidePanel() {
   // 记录正在请求中的 commentId，防止同一条评论并发重复提交
   const inflightRef = useRef<Set<string>>(new Set())
 
+  const filterRef = useRef(filter)
+  filterRef.current = filter
+
+  const scrollCardIntoView = useCallback((commentDomId: string) => {
+    requestAnimationFrame(() => {
+      const card = cardRefs.current[commentDomId]
+      const container = listContainerRef.current
+      if (!card || !container) return
+      const cardRect = card.getBoundingClientRect()
+      const containerRect = container.getBoundingClientRect()
+      const scrollOffset = cardRect.top - containerRect.top + container.scrollTop
+      container.scrollTo({
+        top: scrollOffset - (container.clientHeight - card.offsetHeight) / 2,
+        behavior: "smooth",
+      })
+    })
+  }, [])
+
+  /** 筛选仅作用于下方列表；统计区始终基于全部评论 */
+  const filteredComments = useMemo(() => applyFilter(comments, filter), [comments, filter])
+
+  // 切换筛选时列表回到顶部，避免虚拟列表偏移错乱（滚动联动自动切「全部」时由 skip ref 跳过）
+  useEffect(() => {
+    if (skipNextFilterScrollResetRef.current) {
+      skipNextFilterScrollResetRef.current = false
+      return
+    }
+    listContainerRef.current?.scrollTo({ top: 0 })
+    setVisibleRange({ start: 0, end: 20 })
+  }, [filter])
+
   // ─── 虚拟列表偏移计算（useMemo，不在渲染时全量遍历）─────────────────────
   const { topHeight, bottomHeight } = useMemo(() => {
     let top = 0
     let bottom = 0
-    for (let i = 0; i < comments.length; i++) {
-      const h = itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+    for (let i = 0; i < filteredComments.length; i++) {
+      const h = itemHeightsRef.current[filteredComments[i].id] ?? ITEM_ESTIMATED_HEIGHT
       if (i < visibleRange.start) top += h
       else if (i >= visibleRange.end) bottom += h
     }
     return { topHeight: top, bottomHeight: bottom }
-  }, [comments, visibleRange])
+  }, [filteredComments, visibleRange])
 
   // ─── 更新可见范围 ────────────────────────────────────────────────────────
   const updateVisibleRange = useCallback(() => {
@@ -750,23 +974,23 @@ function SidePanel() {
     const { scrollTop, clientHeight } = container
     let offset = 0
     let start = 0
-    let end = comments.length
+    let end = filteredComments.length
 
-    for (let i = 0; i < comments.length; i++) {
-      const h = itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+    for (let i = 0; i < filteredComments.length; i++) {
+      const h = itemHeightsRef.current[filteredComments[i].id] ?? ITEM_ESTIMATED_HEIGHT
       if (offset + h < scrollTop) { offset += h; start = i + 1 }
       else break
     }
     offset = 0
-    for (let i = 0; i < comments.length; i++) {
-      offset += itemHeightsRef.current[comments[i].id] ?? ITEM_ESTIMATED_HEIGHT
+    for (let i = 0; i < filteredComments.length; i++) {
+      offset += itemHeightsRef.current[filteredComments[i].id] ?? ITEM_ESTIMATED_HEIGHT
       if (offset > scrollTop + clientHeight) { end = i + 1; break }
     }
     setVisibleRange({
       start: Math.max(0, start - BUFFER),
-      end: Math.min(comments.length, end + BUFFER),
+      end: Math.min(filteredComments.length, end + BUFFER),
     })
-  }, [comments])
+  }, [filteredComments])
 
   useEffect(() => {
     updateVisibleRange()
@@ -774,7 +998,27 @@ function SidePanel() {
     if (!container) return
     container.addEventListener("scroll", updateVisibleRange, { passive: true })
     return () => container.removeEventListener("scroll", updateVisibleRange)
-  }, [comments, updateVisibleRange])
+  }, [filteredComments, updateVisibleRange])
+
+  // 筛选为「高意向/待处理」时页面滚动联动：先切到「全部」后在此 effect 里完成定位
+  useEffect(() => {
+    const pid = pendingScrollToPlatformIdRef.current
+    if (!pid) return
+
+    const filtered = applyFilter(comments, filter)
+    const idx = filtered.findIndex(c => c.platformCommentId === pid)
+    if (idx === -1) {
+      pendingScrollToPlatformIdRef.current = null
+      return
+    }
+
+    pendingScrollToPlatformIdRef.current = null
+    setVisibleRange({
+      start: Math.max(0, idx - BUFFER),
+      end: Math.min(filtered.length, idx + BUFFER + 1),
+    })
+    scrollCardIntoView(filtered[idx].id)
+  }, [comments, filter, scrollCardIntoView])
 
   const clearPost = useCallback(() => {
     setComments([])
@@ -790,8 +1034,7 @@ function SidePanel() {
   }, [])
 
   // ─── 拉取评论（页面主导 + DB 补充，两路并行）─────────────────────────────
-  // 依赖说明：fetchComments 依赖 filter，因拉取后要 applyFilter(filter)；下方 effect 依赖 [fetchComments]，
-  // 故切换「全部/高意向/待处理」时会重新拉取并筛一次。若后续拆 effect，勿误加/误删依赖，避免多余请求或 filter 不同步。
+  // 存全部评论；筛选在 UI 层 applyFilter，不触发重复请求。
   const fetchComments = useCallback(async () => {
     setLoading(true)
     try {
@@ -840,9 +1083,7 @@ function SidePanel() {
 
       // 只展示当前页 DOM 的评论（用 DB 补充 status/intent）；当前笔记无评论时不要展示其他笔记的评论
       const list =
-        pageComments.length > 0
-          ? applyFilter(mergeWithDb(pageComments, dbInfoRef.current), filter)
-          : []
+        pageComments.length > 0 ? mergeWithDb(pageComments, dbInfoRef.current) : []
 
       setComments(list)
       setVisibleRange({ start: 0, end: 20 })
@@ -852,9 +1093,9 @@ function SidePanel() {
       setLoading(false)
       setSwitching(false)
     }
-  }, [filter, isNotePage, clearPost])
+  }, [isNotePage, clearPost])
 
-  useEffect(() => { fetchComments() }, [fetchComments]) // 依赖 fetchComments：filter 变化时其引用会变，从而触发重新拉取与 applyFilter
+  useEffect(() => { fetchComments() }, [fetchComments])
 
   // content script 可能还未就绪，仅首次 mount 时补一次兜底
   // 不放入 [fetchComments] 依赖，避免 filter 变化时重复触发
@@ -869,6 +1110,7 @@ function SidePanel() {
     const handler = (msg: { type: string; payload?: { platformCommentId: string } }) => {
       if (msg.type === "URL_CHANGED" || msg.type === "PAGE_LEFT_NOTE") {
         clearPost()
+        setXhsNeedSupplementHint(false)
         // 同一链接再次进入时 content 会发 URL_CHANGED 并重扫；延迟拉取确保能拿到 GET_ALL_PAGE_COMMENTS
         if (msg.type === "URL_CHANGED") setTimeout(fetchComments, 2000)
       }
@@ -878,39 +1120,43 @@ function SidePanel() {
         fetchComments()
       }
 
+      if (msg.type === "XHS_VIEWER_UNRESOLVED") {
+        setXhsNeedSupplementHint(true)
+      }
+      if (msg.type === "XHS_VIEWER_RESOLVED") {
+        setXhsNeedSupplementHint(false)
+      }
+
       if (msg.type === "SCROLL_TO_COMMENT" && msg.payload?.platformCommentId) {
         const pid = msg.payload.platformCommentId
-        setComments(prev => {
-          const idx = prev.findIndex(c => c.platformCommentId === pid)
-          if (idx === -1) return prev
+        const prev = commentsRef.current
+        const fullIdx = prev.findIndex(c => c.platformCommentId === pid)
+        if (fullIdx === -1) return
 
+        const f = filterRef.current
+        const filtered = applyFilter(prev, f)
+        const idxInFiltered = filtered.findIndex(c => c.platformCommentId === pid)
+
+        if (idxInFiltered >= 0) {
           setVisibleRange({
-            start: Math.max(0, idx - BUFFER),
-            end: Math.min(prev.length, idx + BUFFER + 1),
+            start: Math.max(0, idxInFiltered - BUFFER),
+            end: Math.min(filtered.length, idxInFiltered + BUFFER + 1),
           })
+          scrollCardIntoView(filtered[idxInFiltered].id)
+          return
+        }
 
-          const id = prev[idx].id
-          requestAnimationFrame(() => {
-            const card = cardRefs.current[id]
-            const container = listContainerRef.current
-            if (card && container) {
-              const cardRect = card.getBoundingClientRect()
-              const containerRect = container.getBoundingClientRect()
-              const scrollOffset = cardRect.top - containerRect.top + container.scrollTop
-              container.scrollTo({
-                top: scrollOffset - (container.clientHeight - card.offsetHeight) / 2,
-                behavior: "smooth",
-              })
-            }
-          })
-          return prev
-        })
+        if (f !== "all") {
+          pendingScrollToPlatformIdRef.current = pid
+          skipNextFilterScrollResetRef.current = true
+          setFilter("all")
+        }
       }
     }
 
     chrome.runtime.onMessage.addListener(handler)
     return () => chrome.runtime.onMessage.removeListener(handler)
-  }, [fetchComments, clearPost])
+  }, [fetchComments, clearPost, scrollCardIntoView])
 
   // 切换标签时：非笔记页则清空；是笔记页则主动拉评论（解决同一链接再次进入或切回该标签时不显示评论）
   useEffect(() => {
@@ -1015,6 +1261,18 @@ function SidePanel() {
     setTimeout(() => {
       setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: null } }))
     }, 2000)
+
+    if (xhsNeedSupplementHintRef.current) {
+      try {
+        const k = "yanling_toast_xhs_after_fill"
+        if (!sessionStorage.getItem(k)) {
+          sessionStorage.setItem(k, "1")
+          setPanelToast("当前页未识别到登录身份，若列表里出现您自己的评论，请到「灵主」补充小红书昵称")
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }, [])
 
   const toggleSaveReply = useCallback(
@@ -1082,6 +1340,12 @@ function SidePanel() {
 
   const handleLogout = useCallback(async () => {
     await storage.remove(AUTH_TOKEN_KEY)
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      await new Promise<void>(res => {
+        chrome.storage.local.remove(YANLING_XHS_SELF_NICK_STORAGE_KEY, () => res())
+      })
+    }
+    setXhsNeedSupplementHint(false)
     setIsLoggedIn(false)
     setUserProfile(null)
   }, [])
@@ -1089,8 +1353,8 @@ function SidePanel() {
   const pendingCount = useMemo(() => comments.filter(c => c.status === "pending").length, [comments])
   const hotCount = useMemo(() => comments.filter(c => c.intentLevel === "hot").length, [comments])
   const visible = useMemo(
-    () => comments.slice(visibleRange.start, visibleRange.end),
-    [comments, visibleRange]
+    () => filteredComments.slice(visibleRange.start, visibleRange.end),
+    [filteredComments, visibleRange]
   )
 
   // ─── 登录态：未登录显示登录页 ────────────────────────────────────────────
@@ -1125,6 +1389,11 @@ function SidePanel() {
   // ─── 渲染（已登录主界面）────────────────────────────────────────────────────
   return (
     <div className="panel">
+      {panelToast && (
+        <div className="panel-toast" role="status" aria-live="polite">
+          {panelToast}
+        </div>
+      )}
       <div className="main-content">
         {(activeNav === "zhiyan" || activeNav === "cunyan" || activeNav === "account" || activeNav === "settings") ? (
           <header className="main-header">
@@ -1172,12 +1441,19 @@ function SidePanel() {
         ) : null}
 
         {activeNav === "account" && (
-          <AccountPage profile={userProfile} onLogout={handleLogout} />
+          <AccountPage
+            profile={userProfile}
+            onLogout={handleLogout}
+            onXhsNickSaved={trimmed => {
+              if (trimmed) setXhsNeedSupplementHint(false)
+            }}
+          />
         )}
 
         {activeNav === "zhiyan" && (
           <ZhiyanPage
-            comments={comments}
+            allComments={comments}
+            filteredCount={filteredComments.length}
             loading={loading}
             switching={switching}
             filter={filter}
@@ -1195,6 +1471,22 @@ function SidePanel() {
             hotCount={hotCount}
             pendingCount={pendingCount}
             setFilter={setFilter}
+            xhsNickHint={
+              xhsNeedSupplementHint && comments.length > 0 && !xhsBannerDismissed && userProfile?.id
+                ? {
+                    show: true,
+                    onGoToAccount: () => setActiveNav("account"),
+                    onDismiss: () => {
+                      try {
+                        localStorage.setItem(`yanling_dismiss_xhs_hint_${userProfile.id}`, "1")
+                      } catch {
+                        /* ignore */
+                      }
+                      setXhsBannerDismissed(true)
+                    },
+                  }
+                : undefined
+            }
           />
         )}
 
@@ -1205,6 +1497,7 @@ function SidePanel() {
             setCategory={setCunyanCategory}
             search={cunyanSearch}
             setSearch={setCunyanSearch}
+            onDelete={deleteSavedReply}
           />
         )}
 
@@ -1214,7 +1507,7 @@ function SidePanel() {
       <aside className="main-nav">
         <button
           type="button"
-          className="nav-avatar"
+          className={`nav-avatar ${activeNav === "account" ? "active" : ""}`}
           onClick={() => setActiveNav("account")}
           title="灵主"
         >

@@ -2,7 +2,9 @@
 
 > 核心原则：**先验证，再构建**。以最小代价跑通核心价值闭环，用真实用户反馈驱动后续迭代。单人 + AI 开发模式，优先选择零运维的托管服务。
 
-最后更新：2026-03-15（v2.0 单人 MVP 版）
+> **⚠️ 栈说明**：下文 Phase 1 仍保留早期 **Next.js / Vercel / Neon** 叙事，便于对照历史规划。**当前仓库已实现栈以 [architecture-as-built.md](architecture-as-built.md) 为准**：**Go (Gin) + PostgreSQL + Plasmo**，无 `web/` Next 后端。
+
+最后更新：2026-03-16（补充与现栈对齐说明）
 
 ---
 

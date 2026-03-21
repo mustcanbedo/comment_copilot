@@ -1,5 +1,7 @@
 # 侧栏「登录态 + 双 UI」重构步骤
 
+> **文档性质**：过程稿 / 历史步骤记录。**部分段落（如「RequireAuth 被注释」、登录字段）可能与当前代码不一致**，请以 [architecture-as-built.md](architecture-as-built.md) 与 `backend/internal/server/router.go` 为准。文档索引见 [README.md](README.md)。
+
 目标：未登录/过期 → 显示登录页（图二）；已登录 → 显示主界面（图一：智言/存言 + 评论列表）。
 
 ---

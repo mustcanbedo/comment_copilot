@@ -2,9 +2,10 @@
 
 > 面向后端协作者：描述当前仓库内已实现的后端边界、目录、API 与数据流。
 
-最后更新：2026-03-15
+最后更新：2026-03-16
 
 - **使用逻辑与用户动线**见 [usage-flow.md](usage-flow.md)。
+- **完整文档索引与架构审阅**见 [README.md](README.md)、[architecture-review-note-comment-and-docs.md](architecture-review-note-comment-and-docs.md)。
 
 ---
 
@@ -50,7 +51,7 @@ flowchart LR
 
 | 路径 | 方法 | 说明 |
 |------|------|------|
-| `/api/health` | GET | 健康检查 |
+| `/api/health` | GET | 健康检查（当前注册在 JWT 保护组内，**需 Bearer**） |
 | `/api/auth/register` | POST | 用户注册（创建 tenant + user） |
 | `/api/auth/login` | POST | 登录，返回 JWT token |
 | `/api/auth/logout` | POST | 登出（JWT 无状态，客户端清除即可） |
@@ -62,6 +63,7 @@ flowchart LR
 | `/api/saved-replies/:id` | DELETE | 删除存言（需 JWT + x-tenant-id） |
 | `/api/selectors` | GET | 平台 DOM 选择器配置 |
 | `/api/ai/reply` | POST | AI 回复生成（DeepSeek，扣积分，需 JWT + x-tenant-id） |
+| `/api/ai/note-comment` | POST | **规划中**：笔记主跟评文案生成（契约见 [plan-note-comment-api-independent-route.md](plan-note-comment-api-independent-route.md)） |
 | `/api/settings/persona` | GET/POST | 人设读取/保存（需 JWT） |
 
 ### 2.2 数据库与迁移
@@ -78,9 +80,10 @@ flowchart LR
 |------|------|------|----------|----------|
 | `/api/auth/register` | POST | 无 | `{ email, password, name? }` | `{ ok, userId, tenantId }` |
 | `/api/auth/login` | POST | 无 | `{ email, password }` | `{ token }` |
-| `/api/auth/me` | GET | JWT Bearer | Header: `x-tenant-id` | `{ id, email, tenantId, freePointsBalance, topUpPointsBalance }` |
+| `/api/auth/me` | GET | JWT Bearer | — | `{ ok, user: { id, email, name }, points: { freeBalance, freeQuota, topupBalance, total } }` |
 | `/api/ingest/comments` | POST | JWT + x-tenant-id | `{ platform, comments[] }` 每项含 `platformCommentId`, `authorName`, `content`, `commentedAt`, `postUrl?`, `isAuthorReply?` | `{ ok, saved, skipped }` |
-| `/api/ai/reply` | POST | JWT + x-tenant-id | `{ commentId, commentContent, persona? }` | `{ ok, suggestions[] }`；积分不足返回 402 |
+| `/api/ai/reply` | POST | JWT + x-tenant-id | `{ commentId, commentContent, persona?, postTitle?, postContent? }` | `{ ok, suggestions[] }`；积分不足返回 402；**handler 内不写库** |
+| `/api/ai/note-comment` | POST | JWT + x-tenant-id | 见 plan 文档 | 与 `reply` 成功体一致；**待实现** |
 | `/api/comments` | GET | JWT + x-tenant-id | Query: `intent`, `status`, `postUrl`, `limit` | `{ ok, data: Comment[], total }` |
 | `/api/comments/mark-replied` | POST | JWT + x-tenant-id | `{ commentId }` | `{ ok }` |
 | `/api/saved-replies` | GET | JWT + x-tenant-id | Query: `category`, `search`, `limit` | `{ ok, data: SavedReply[] }` |
@@ -89,7 +92,7 @@ flowchart LR
 | `/api/selectors` | GET | JWT + x-tenant-id | Query: `platform` | `{ ok, platform, version, selectors }` |
 | `/api/settings/persona` | GET | JWT Bearer | — | `{ ok, persona }` |
 | `/api/settings/persona` | POST | JWT Bearer | `{ keywords, autoGenerate? }` | `{ ok, persona }` |
-| `/api/health` | GET | 无 | — | `{ status: "ok" }` |
+| `/api/health` | GET | JWT Bearer | — | `{ status: "ok" }`（与当前 `router` 一致） |
 
 ---
 
@@ -105,19 +108,27 @@ Content Script (DOM) → Background → POST /api/ingest/comments (JWT)
   → 返回 { saved, skipped }
 ```
 
-### 4.2 AI 回复
+### 4.2 AI 回复（与 `ai_handler.Reply` 实现一致）
 
 ```
 Sidepanel / Background → POST /api/ai/reply (JWT + x-tenant-id)
-  → 校验 commentId、commentContent
-  → 扣积分（优先扣免费积分，不足返回 402）
-  → 读取 tenants.persona
-  → 调用 DeepSeek API，解析 JSON suggestions
-  → 写入 ai_replies，更新 comments.status = 'replied'
-  → 返回 { ok, suggestions }；失败则回退积分
+  → 校验 commentId、commentContent（及租户头）
+  → 若未配置 deepseek_api_key：返回 mock suggestions，不扣费
+  → 否则：扣积分（优先免费积分，不足返回 402）
+  → 调用 DeepSeek Chat Completions（JSON 格式），解析 suggestions
+  → 返回 { ok, suggestions }；任一步失败则 RefundPoints
 ```
 
-### 4.3 列表查询
+> **说明**：当前 `Reply` handler **不**写入 `ai_replies`、**不**更新 `comments.status`。评论「已回复」若需与后端一致，见插件侧本地方案与后续 [todo_v1_reply_status_sync.md](todo_v1_reply_status_sync.md)；可选调用 `POST /api/comments/mark-replied`。
+
+### 4.3 标记评论已回复
+
+```
+扩展在用户确认已回复等时机 → POST /api/comments/mark-replied (JWT + x-tenant-id)
+  → 更新对应评论在 DB 中的状态（与 AI 生成接口独立）
+```
+
+### 4.4 列表查询
 
 - **侧边栏**：`GET /api/comments?postUrl=<当前页URL>`（JWT）→ 按当前帖子过滤评论。
 - 支持 `intent`、`status`、`limit` 追加过滤，过滤在 SQL 层完成。

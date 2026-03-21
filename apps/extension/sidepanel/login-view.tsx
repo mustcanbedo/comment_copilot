@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { API_BASE } from "../constants"
 import { LegalModal } from "./legal-modal"
 import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal-content"
@@ -45,6 +45,13 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
   const [loading, setLoading] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [legalModal, setLegalModal] = useState<"terms" | "privacy" | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(t)
+  }, [toast])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -54,7 +61,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
       const res = await fetch(`${apiBase}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, phone: email }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -83,7 +90,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
       const res = await fetch(`${apiBase}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name: name || undefined }),
+        body: JSON.stringify({ email, password, phone: email, name: name || undefined }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -96,6 +103,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
         // 注册成功：跳回登录页，邮箱和密码已保留在 state 中，登录表单会自动带出
         setError("")
         setShowRegister(false)
+        setToast("注册成功，请登录")
       }
     } catch {
       setError("网络错误，请稍后重试")
@@ -187,6 +195,7 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
                 placeholder="昵称（选填）"
                 value={name}
                 onChange={e => setName(e.target.value)}
+                maxLength={40}
               />
               <input
                 type="password"
@@ -234,6 +243,13 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
           />
         )}
       </div>
+
+      {toast && (
+        <div className="login-toast" role="status" aria-live="polite">
+          <span className="login-toast-icon" aria-hidden>✓</span>
+          {toast}
+        </div>
+      )}
     </div>
   )
 }

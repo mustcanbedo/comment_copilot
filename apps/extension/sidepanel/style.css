@@ -41,12 +41,59 @@ body {
 
 /* ==================== 页面一：未登录引导页 ==================== */
 .login-page {
+  position: relative;
   min-height: 100vh;
   background: var(--bg-login);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px 20px;
+}
+
+/* 相对 .login-page 定位，避免扩展侧栏里 position:fixed 参照异常导致看不见 */
+.login-toast {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgba(26, 26, 26, 0.92);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  animation: login-toast-in 0.25s ease-out;
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+}
+
+.login-toast-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #34a853;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+@keyframes login-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .login-inner {
@@ -321,11 +368,32 @@ body {
 
 /* ==================== 页面二：已登录主界面 ==================== */
 .panel {
+  position: relative;
   display: flex;
   flex-direction: row;
   height: 100vh;
   overflow: hidden;
   background: var(--bg-page);
+}
+
+/* 主界面轻提示（存言删除等），与 login-toast 视觉一致 */
+.panel-toast {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgba(26, 26, 26, 0.92);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  max-width: calc(100% - 48px);
+  text-align: center;
+  pointer-events: none;
+  animation: login-toast-in 0.25s ease-out;
 }
 
 .main-content {
@@ -463,6 +531,49 @@ body {
   background: var(--brand);
   border-color: var(--brand);
   color: #fff;
+}
+
+/* 智言：引导去灵主填写小红书昵称 */
+.zhiyan-xhs-banner {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff8e6;
+  border: 1px solid #ffe4a3;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.zhiyan-xhs-banner p {
+  margin: 0 0 8px;
+}
+
+.zhiyan-xhs-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.zhiyan-xhs-banner-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-input);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.zhiyan-xhs-banner-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.zhiyan-xhs-banner-btn:hover {
+  opacity: 0.92;
 }
 
 /* 评论列表区：白底、条目间 1px 分割，无卡片 */
@@ -723,18 +834,37 @@ body {
   position: relative;
 }
 
+/* 未选中时与下方 nav-btn 一致为灰底，避免整栏只有「我」永远大红块 */
 .nav-avatar {
   width: 38px;
   height: 38px;
   border-radius: 11px;
-  background: var(--brand-gradient);
+  border: none;
+  padding: 0;
+  background: var(--nav-inactive-bg);
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
   font-weight: 800;
-  color: #fff;
   cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.nav-avatar:hover {
+  background: var(--nav-hover-bg);
+  color: var(--brand);
+}
+
+.nav-avatar.active {
+  background: var(--brand-gradient);
+  color: #fff;
+}
+
+.nav-avatar:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 .nav-divider {
@@ -1240,6 +1370,52 @@ body {
   background: #fff0f2;
 }
 
+.account-xhs-card {
+  padding: 14px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.account-xhs-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.account-xhs-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.account-xhs-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-input);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.account-xhs-save {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.account-xhs-save:hover {
+  opacity: 0.92;
+}
+
 .account-subscription-card {
   flex: 1;
   display: flex;
@@ -1390,10 +1566,33 @@ body {
 }
 
 .cunyan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px 10px;
   border-radius: 8px;
   background: #fff;
   border: 1px solid var(--border-light);
+}
+
+.cunyan-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cunyan-delete-btn {
+  flex-shrink: 0;
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.cunyan-delete-btn:hover {
+  color: var(--badge-hot-text);
+  background: var(--badge-hot-bg);
 }
 
 .cunyan-text {

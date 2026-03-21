@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"comment-copilot-web-backend/internal/repository"
 
@@ -14,6 +15,9 @@ import (
 )
 
 const pointsPerCall = 1
+
+// DeepSeek 调用可能较慢，避免 DefaultClient 无超时挂死连接
+var deepSeekHTTPClient = &http.Client{Timeout: 90 * time.Second}
 
 type AIHandler struct {
 	deepSeekAPIKey string
@@ -25,12 +29,7 @@ func NewAIHandler(deepSeekAPIKey string, userRepo *repository.UserRepository) *A
 }
 
 func (h *AIHandler) Reply(c *gin.Context) {
-	userIDVal, ok := c.Get("userId")
-	if !ok || userIDVal == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
-		return
-	}
-	userID := userIDVal.(string)
+	userID := c.GetString("userId")
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
 		return
@@ -123,7 +122,7 @@ func (h *AIHandler) Reply(c *gin.Context) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+h.deepSeekAPIKey)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := deepSeekHTTPClient.Do(httpReq)
 	if err != nil {
 		_ = h.userRepo.RefundPoints(userID, deductResult.FromFree, deductResult.FromTopup)
 		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "AI service error"})

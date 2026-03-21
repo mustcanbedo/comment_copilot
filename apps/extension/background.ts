@@ -40,12 +40,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.action.setBadgeText({ text: "!" })
     chrome.action.setBadgeBackgroundColor({ color: "#ff4444" })
     sendResponse({ ok: true })
+    return
   }
 
-  // SCROLL_TO_COMMENT / URL_CHANGED 由 content script 直接广播到所有扩展页面
-  // （sidepanel 会直接收到，background 无需转发，转发反而导致 sidepanel 收到两次）
-  if (message.type === "SCROLL_TO_COMMENT" || message.type === "URL_CHANGED") {
+  // SCROLL_TO_COMMENT / URL_CHANGED / XHS_VIEWER_* 由 content 广播，sidepanel 同步监听；background 仅 ack，避免未处理报错
+  if (
+    message.type === "SCROLL_TO_COMMENT" ||
+    message.type === "URL_CHANGED" ||
+    message.type === "XHS_VIEWER_UNRESOLVED" ||
+    message.type === "XHS_VIEWER_RESOLVED"
+  ) {
     sendResponse({ ok: true })
+    return
   }
 
   if (message.type === "FILL_REPLY") {
@@ -55,7 +61,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         chrome.tabs.sendMessage(tabId, {
           type: "FILL_REPLY",
           payload: message.payload,
-        }, (res) => sendResponse(res || { ok: false }))
+        }, (res) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message })
+            return
+          }
+          sendResponse(res || { ok: false })
+        })
       } else {
         sendResponse({ ok: false, error: "no active tab" })
       }
@@ -68,6 +80,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const tabId = tabs[0]?.id
       if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: "GET_ALL_PAGE_COMMENTS" }, (comments) => {
+          if (chrome.runtime.lastError) {
+            sendResponse([])
+            return
+          }
           sendResponse(Array.isArray(comments) ? comments : [])
         })
       } else {
@@ -87,6 +103,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const tabId = tabs[0]?.id
       if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: "GET_POST_CONTENT" }, (res) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ postTitle: "", postContent: "" })
+            return
+          }
           sendResponse(res ?? { postTitle: "", postContent: "" })
         })
       } else {
@@ -164,6 +184,9 @@ async function handleGetAiReply(payload: {
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
   const token = await storage.get<string>("authToken")
+  if (!token) {
+    return { ok: false, error: "未登录", suggestions: [] as string[] }
+  }
 
   try {
     const res = await fetch(`${API_BASE}/ai/reply`, {
@@ -171,7 +194,7 @@ async function handleGetAiReply(payload: {
       headers: {
         "Content-Type": "application/json",
         "x-tenant-id": tenantId,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
     })

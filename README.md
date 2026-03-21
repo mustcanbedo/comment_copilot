@@ -22,24 +22,25 @@ Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助小�
 ### 合规说明
 
 本产品采用「用户数字助理」模式：
-- 仅读取页面上**用户可见**的公开评论（DOM 解析）
-- **不自动发送**任何内容，发送由用户手动确认
-- 不模拟登录、不调用平台 API、不批量操作
+- 仅读取页面上**用户可见**的公开内容（如评论、笔记展示区域，DOM 解析）
+- AI 文案可**一键填入**输入框；**不自动发送**，须在平台内手动点击发送
+- 不模拟登录、不调用平台官方未开放接口代发、不进行违背平台规则的批量自动化操作
 
 ---
 
 ## 文档索引
 
-| 文档 | 说明 |
-|------|------|
-| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑：插件为主、身份绑定流程 |
-| [docs/architecture-as-built.md](docs/architecture-as-built.md) | 已实现技术架构（API、目录、数据流） |
-| [docs/architecture_comment_copilot.md](docs/architecture_comment_copilot.md) | 技术架构与演进（含规划） |
-| [docs/comment_copilot_database_schema.md](docs/comment_copilot_database_schema.md) | 数据库表结构 |
-| [docs/prd_comment_copilot.md](docs/prd_comment_copilot.md) | 产品需求文档 |
-| [docs/roadmap_comment_copilot.md](docs/roadmap_comment_copilot.md) | 开发路线图 |
-| [docs/code-review.md](docs/code-review.md) | 代码审查结论与建议 |
-| [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与在 Windows 上安装 |
+**完整索引、按角色阅读路径、架构审阅** → **[docs/README.md](docs/README.md)**
+
+| 常用文档 | 说明 |
+|----------|------|
+| [docs/architecture-as-built.md](docs/architecture-as-built.md) | **已实现**后端 API、目录、数据流（与代码同步） |
+| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑、租户头、积分、合规 |
+| [docs/plan-note-comment-api-independent-route.md](docs/plan-note-comment-api-independent-route.md) | 笔记跟评 AI：`POST /api/ai/note-comment` 执行单（已定案） |
+| [docs/architecture-review-note-comment-and-docs.md](docs/architecture-review-note-comment-and-docs.md) | 架构审阅（跟评方案 + 文档健康度） |
+| [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与安装 |
+
+更多（PRD、路线图、库表、方案对比等）见 [docs/README.md](docs/README.md)。
 
 ---
 
@@ -102,45 +103,33 @@ comment_copilot/
 - Node.js 18+
 - npm
 
-### 1. 克隆项目
+### 启动命令
+
+| 场景 | 命令 | 说明 |
+|------|------|------|
+| **本地开发** | `npm run dev:backend` | 启动 Go 后端（localhost:3000） |
+| | `npm run dev` | 启动插件开发模式，连本地 API |
+| **联调线上** | `npm run dev:prod` | 启动插件开发模式，连线上 API（.env.production） |
+
+本地开发需**两个终端**：先 `npm run dev:backend`，再 `npm run dev`。
+
+### 首次配置
 
 ```bash
-git clone https://github.com/mustcanbedo/comment_copilot.git
-cd comment_copilot
+# 1. 后端配置
+cp backend/config.yaml.example backend/config.yaml
+# 编辑 config.yaml：填写 database_url、deepseek_api_key、auth_secret
+
+# 2. 插件依赖
+cd apps/extension && npm install
+# macOS arm64 需额外：npm install --platform=darwin --arch=arm64v8 sharp
 ```
 
-### 2. 启动 Go 后端
+### 加载插件
 
-```bash
-cd backend
+Chrome → `chrome://extensions/` → 开发者模式 → 加载已解压 → 选择 `apps/extension/.plasmo/chrome-mv3-dev`。
 
-# 复制配置模板并填写
-cp config.yaml.example config.yaml
-# 修改 config.yaml：填写 database_url、deepseek_api_key、auth_secret
-
-# 设置国内 Go 镜像（中国大陆）
-go env -w GOPROXY=https://goproxy.cn,direct
-go env -w GONOSUMDB='*'
-
-# 启动
-go run ./cmd/server
-# → Go backend running at http://localhost:3000/api
-```
-
-### 3. 启动 Chrome 插件
-
-```bash
-cd apps/extension
-npm install
-
-# macOS arm64 需额外修复 sharp
-npm install --platform=darwin --arch=arm64v8 sharp
-
-npm run dev
-# → 打开 Chrome → 扩展程序 → 加载已解压 → 选择 .plasmo/chrome-mv3-dev
-```
-
-开发时请保持 `npm run dev` 运行。若未运行 dev 却加载了开发构建的扩展，控制台会出现 `WebSocket connection to 'ws://localhost:1815/' failed`（Plasmo/Parcel 的 HMR 注入），可忽略或改用生产构建：`npm run build` 后加载 `build/chrome-mv3-prod`。
+开发时请保持 `npm run dev` 或 `npm run dev:prod` 运行。若未运行却加载了开发构建，控制台会出现 WebSocket 连接失败，可忽略或改用 `npm run build` 后加载 `build/chrome-mv3-prod`。
 
 ### 4. 在小红书测试
 
@@ -166,13 +155,17 @@ auto_migrate: true   # 首次启动设为 true，自动建表
 
 ### apps/extension 环境变量
 
+| 文件 | 用途 | API 地址 |
+|------|------|----------|
+| `.env.development` | `npm run dev` 本地开发 | `http://localhost:3000/api` |
+| `.env.production` | `npm run dev:prod` 联调线上、`npm run build` 打包 | 线上域名 |
+
 ```env
-# .env.development（本地开发）
+# .env.development
 PLASMO_PUBLIC_API_URL=http://localhost:3000/api
 
-# .env.production（生产打包）
+# .env.production（联调线上时使用）
 PLASMO_PUBLIC_API_URL=https://your-api-domain.com/api
-# 意见反馈用 GitHub 仓库（可选，默认 mustcanbedo/yanling）
 # PLASMO_PUBLIC_GITHUB_REPO=owner/yanling
 ```
 

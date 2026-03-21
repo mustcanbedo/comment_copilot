@@ -1,3 +1,6 @@
+/** 灵主页保存的小红书昵称（chrome.storage.local），供 content script 过滤当前用户自己的评论 */
+export const YANLING_XHS_SELF_NICK_STORAGE_KEY = "yanling_xhs_self_nickname"
+
 export const API_BASE = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:3000/api"
 export const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
