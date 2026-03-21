@@ -66,6 +66,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		tenantProtected.DELETE("/saved-replies/:id", deps.SavedReplyHandler.Delete)
 		tenantProtected.GET("/selectors", deps.SelectorHandler.Get)
 		tenantProtected.POST("/ai/reply", deps.AIHandler.Reply)
+		tenantProtected.POST("/ai/note-comment", deps.AIHandler.NoteComment)
 		tenantProtected.GET("/settings/persona", deps.PersonaHandler.Get)
 		tenantProtected.POST("/settings/persona", deps.PersonaHandler.Update)
 	}
