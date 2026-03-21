@@ -15,6 +15,6 @@ pnpm-lock.yaml
 .tools/
 .npm-cache/
 .pnpm-store/
-pnpm-lock.yaml
 config.yaml
 .gocache
+*.tsbuildinfo

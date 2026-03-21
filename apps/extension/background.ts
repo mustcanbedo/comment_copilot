@@ -1,11 +1,8 @@
 import { Storage } from "@plasmohq/storage"
-import { API_BASE, DEFAULT_TENANT_ID } from "./constants"
+import { API_BASE, AUTH_TOKEN_KEY, DEFAULT_TENANT_ID, isXhsNotePageUrl } from "./constants"
+import { parseAiSuggestionsResponse } from "./parse-ai-suggestions-response"
 
 const storage = new Storage()
-
-function isNotePage(url?: string): boolean {
-  return Boolean(url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url))
-}
 
 // 点击插件图标时打开侧边栏
 chrome.action.onClicked.addListener((tab) => {
@@ -17,7 +14,7 @@ chrome.action.onClicked.addListener((tab) => {
 
 // 同一标签内 URL 变化（如从笔记页整页跳转到首页）：若变为非笔记页，通知侧边栏清空
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!changeInfo.url || isNotePage(tab.url)) return
+  if (!changeInfo.url || isXhsNotePageUrl(tab.url)) return
   chrome.tabs.query({ active: true, currentWindow: true }, ([active]) => {
     if (active?.id === tabId) {
       chrome.runtime.sendMessage({ type: "PAGE_LEFT_NOTE" }).catch(() => {})
@@ -33,6 +30,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "GET_AI_REPLY") {
     handleGetAiReply(message.payload).then(sendResponse)
+    return true
+  }
+
+  if (message.type === "GET_AI_NOTE_COMMENT") {
+    handleGetAiNoteComment(message.payload).then(sendResponse)
     return true
   }
 
@@ -52,6 +54,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   ) {
     sendResponse({ ok: true })
     return
+  }
+
+  if (message.type === "FILL_NOTE_COMMENT") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: "FILL_NOTE_COMMENT",
+          payload: message.payload,
+        }, (res) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message })
+            return
+          }
+          sendResponse(res || { ok: false })
+        })
+      } else {
+        sendResponse({ ok: false, error: "no active tab" })
+      }
+    })
+    return true
   }
 
   if (message.type === "FILL_REPLY") {
@@ -104,13 +127,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: "GET_POST_CONTENT" }, (res) => {
           if (chrome.runtime.lastError) {
-            sendResponse({ postTitle: "", postContent: "" })
+            sendResponse({ postTitle: "", postContent: "", postUrl: "" })
             return
           }
-          sendResponse(res ?? { postTitle: "", postContent: "" })
+          sendResponse(res ?? { postTitle: "", postContent: "", postUrl: "" })
         })
       } else {
-        sendResponse({ postTitle: "", postContent: "" })
+        sendResponse({ postTitle: "", postContent: "", postUrl: "" })
       }
     })
     return true
@@ -122,7 +145,7 @@ async function handleCommentsCollected(payload: {
   comments: object[]
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
-  const token = await storage.get<string>("authToken")
+  const token = await storage.get<string>(AUTH_TOKEN_KEY)
 
   try {
     const res = await fetch(`${API_BASE}/ingest/comments`, {
@@ -151,7 +174,7 @@ async function handleMarkCommentReplied(payload: {
   platform?: string
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
-  const token = await storage.get<string>("authToken")
+  const token = await storage.get<string>(AUTH_TOKEN_KEY)
   if (!token) return { ok: false, error: "未登录" }
 
   try {
@@ -175,6 +198,36 @@ async function handleMarkCommentReplied(payload: {
   }
 }
 
+async function handleGetAiNoteComment(payload: {
+  postUrl: string
+  postTitle?: string
+  postContent?: string
+  persona?: string
+  style?: string
+}) {
+  const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
+  const token = await storage.get<string>(AUTH_TOKEN_KEY)
+  if (!token) {
+    return { ok: false, error: "未登录", suggestions: [] as string[] }
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/ai/note-comment`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": tenantId,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    })
+    return await parseAiSuggestionsResponse(res)
+  } catch (err) {
+    console.error("[CommentCopilot] ai note-comment error:", err)
+    return { ok: false, error: "网络异常", suggestions: [] }
+  }
+}
+
 async function handleGetAiReply(payload: {
   commentId: string
   commentContent: string
@@ -183,7 +236,7 @@ async function handleGetAiReply(payload: {
   postContent?: string
 }) {
   const tenantId = (await storage.get("tenantId")) || DEFAULT_TENANT_ID
-  const token = await storage.get<string>("authToken")
+  const token = await storage.get<string>(AUTH_TOKEN_KEY)
   if (!token) {
     return { ok: false, error: "未登录", suggestions: [] as string[] }
   }
@@ -198,9 +251,9 @@ async function handleGetAiReply(payload: {
       },
       body: JSON.stringify(payload),
     })
-    return await res.json()
+    return await parseAiSuggestionsResponse(res)
   } catch (err) {
     console.error("[CommentCopilot] ai reply error:", err)
-    return { ok: false, suggestions: [] }
+    return { ok: false, error: "网络异常", suggestions: [] }
   }
 }

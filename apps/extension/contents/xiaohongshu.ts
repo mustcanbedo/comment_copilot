@@ -1,6 +1,6 @@
 import type { PlasmoCSConfig } from "plasmo"
 
-import { YANLING_XHS_SELF_NICK_STORAGE_KEY } from "../constants"
+import { isXhsNotePageUrl, YANLING_XHS_SELF_NICK_STORAGE_KEY } from "../constants"
 
 export const config: PlasmoCSConfig = {
   matches: ["https://www.xiaohongshu.com/*"],
@@ -396,7 +396,7 @@ async function scanAllComments(): Promise<ScrapedComment[]> {
 
   if (nodes.length === 0) {
     consecutiveFailures++
-    const isNote = /xiaohongshu\.com.*\/explore\/[a-zA-Z0-9]+/.test(currentUrl)
+    const isNote = isXhsNotePageUrl(currentUrl)
     if (consecutiveFailures >= MAX_FAILURES && isNote) {
       chrome.runtime.sendMessage({ type: "CIRCUIT_OPEN" }).catch(() => {})
       console.warn("[CommentCopilot] Circuit opened: selector failures")
@@ -467,6 +467,7 @@ window.addEventListener("popstate", onUrlChange)
 function onUrlChange() {
   // 同一链接再次进入（如从首页点回同一笔记）也需清空并重新扫描，否则侧边栏不会显示评论
   currentUrl = location.href
+  cachedNoteContainer = null
   seenIds.clear()
   viewerHintMemo = null
   resetXhsViewerNotifyState()
@@ -495,9 +496,532 @@ function runThrottledScan() {
 }
 const observer = new MutationObserver(runThrottledScan)
 
+/** 判断是否在单条评论卡片内（与底部「主评论」输入区分）；避免 [class*='comment-item'] 误伤无关模块 */
+function isInsideListCommentRow(el: Element): boolean {
+  if (el.closest(SELECTORS.commentList)) return true
+  if (el.closest(".note-comment-card")) return true
+  const fuzzy = el.closest("[class*='comment-item']")
+  if (!fuzzy) return false
+  const cls = ((fuzzy as HTMLElement).className?.toString?.() ?? "").split(/\s+/).filter(Boolean)
+  return cls.some(t => t === "comment-item" || /^comment-item[-_]/.test(t))
+}
+
+/** 主评相关：穿透 shadow 的最大深度（过深多为无关子树，避免全页递归过重） */
+const NOTE_COMMENT_MAX_SHADOW_DEPTH = 10
+
+/**
+ * 遍历 light DOM + 各层 open ShadowRoot。
+ * `maxShadowDepth` 限制 shadow 嵌套层数，降低 fillNoteComment 全树扫描时的 CPU 峰值。
+ */
+function forEachElementDeep(
+  root: Document | ShadowRoot | HTMLElement,
+  visit: (el: Element) => void,
+  shadowDepth = 0,
+  maxShadowDepth = NOTE_COMMENT_MAX_SHADOW_DEPTH
+): void {
+  root.querySelectorAll("*").forEach((el) => {
+    visit(el)
+    const sr = (el as HTMLElement).shadowRoot
+    if (sr && shadowDepth < maxShadowDepth) {
+      forEachElementDeep(sr, visit, shadowDepth + 1, maxShadowDepth)
+    }
+  })
+}
+
+/** 深度优先找 #noteContainer，命中即停；避免 getNoteContainerEl 走 `querySelectorAll('*')` 扫整页 */
+function findNoteContainerByIdDeep(
+  el: Element,
+  shadowDepth: number,
+  maxDepth: number
+): HTMLElement | null {
+  if (shadowDepth > maxDepth) return null
+  if (el instanceof HTMLElement && el.id === "noteContainer") return el
+  for (let i = 0; i < el.children.length; i++) {
+    const h = findNoteContainerByIdDeep(el.children[i]!, shadowDepth, maxDepth)
+    if (h) return h
+  }
+  const sr = (el as HTMLElement).shadowRoot
+  if (sr && shadowDepth < maxDepth) {
+    for (let i = 0; i < sr.children.length; i++) {
+      const h = findNoteContainerByIdDeep(sr.children[i]!, shadowDepth + 1, maxDepth)
+      if (h) return h
+    }
+  }
+  return null
+}
+
+const NOTE_COMMENT_PLACEHOLDER_RE =
+  /说点什么|有爱评论|发条评论|发一条|写下你的评论|友善评论|说两句|快来评论|留下你的想法/i
+
+function innerTextCompact(el: Element): string {
+  return ((el as HTMLElement).innerText ?? "").replace(/\s+/g, " ").trim()
+}
+
+function hasVisibleBox(h: HTMLElement): boolean {
+  const r = h.getBoundingClientRect()
+  return r.width > 0 && r.height > 0
+}
+
+/** 同页同 URL 缓存 #noteContainer，fillNoteComment 内会多次调用；换页在 onUrlChange 清空 */
+let cachedNoteContainer: { url: string; el: HTMLElement } | null = null
+
+/** 笔记正文容器（部分环境可能在 shadow 内，不单依赖 document.getElementById） */
+function getNoteContainerEl(): HTMLElement | null {
+  if (cachedNoteContainer && cachedNoteContainer.url === currentUrl && document.contains(cachedNoteContainer.el)) {
+    return cachedNoteContainer.el
+  }
+  cachedNoteContainer = null
+
+  const direct = document.getElementById("noteContainer")
+  if (direct) {
+    cachedNoteContainer = { url: currentUrl, el: direct }
+    return direct
+  }
+  const byClass = document.querySelector(".note-container") as HTMLElement | null
+  if (byClass) {
+    cachedNoteContainer = { url: currentUrl, el: byClass }
+    return byClass
+  }
+  const root = document.documentElement
+  if (!root) return null
+  const hit = findNoteContainerByIdDeep(root, 0, NOTE_COMMENT_MAX_SHADOW_DEPTH)
+  if (hit) cachedNoteContainer = { url: currentUrl, el: hit }
+  return hit
+}
+
+/** #noteContainer 内可见的「发送 / 取消」→ 主评已进入图二展开态（带发送栏） */
+function findVisibleSendOrCancelInNoteContainer(): HTMLElement | null {
+  const nc = getNoteContainerEl()
+  if (!nc) return null
+  let found: HTMLElement | null = null
+  forEachElementDeep(nc, (el) => {
+    if (found) return
+    if (!(el instanceof HTMLElement)) return
+    if (isInsideListCommentRow(el)) return
+    const t = innerTextCompact(el)
+    if (t !== "发送" && t !== "取消") return
+    if (!hasVisibleBox(el)) return
+    found = el
+  })
+  return found
+}
+
+function getEngageBarContentEditEl(): HTMLElement | null {
+  const nc = getNoteContainerEl()
+  if (!nc) return null
+  return (
+    (nc.querySelector("div.interactions.engage-bar .input-box .content-edit") as HTMLElement | null) ??
+    (nc.querySelector(".engage-bar .input-box .content-edit") as HTMLElement | null)
+  )
+}
+
+/**
+ * 胶囊未点开时：`.content-edit` 里已有 `p.content-input`，但被
+ * `div.inner-when-not-active.not-active` + `div.inner` 盖住；此时绝不能往 p 里塞字，必须先点胶囊去 `not-active`。
+ */
+function isNoteCommentCapsuleOverlayShowing(): boolean {
+  const ce = getEngageBarContentEditEl()
+  if (!ce) return false
+  const shell = ce.querySelector(".inner-when-not-active") as HTMLElement | null
+  if (!shell || !shell.classList.contains("not-active")) return false
+  if (!hasVisibleBox(shell)) return false
+  const inner = shell.querySelector(":scope div.inner") as HTMLElement | null
+  return inner != null && hasVisibleBox(inner)
+}
+
+/**
+ * 主评区是否已展开：有发送/取消，或 .content-edit 区域明显加高（胶囊态较扁，展开后含工具栏更高）。
+ */
+function isNoteMainCommentComposerExpanded(): boolean {
+  if (findVisibleSendOrCancelInNoteContainer()) return true
+  const ce = getEngageBarContentEditEl()
+  if (!ce || !hasVisibleBox(ce)) return false
+  const ch = ce.getBoundingClientRect().height
+  if (ch >= 76) return true
+  // 扁条但胶囊壳已去掉 not-active → 视为已展开
+  if (!isNoteCommentCapsuleOverlayShowing()) {
+    const p = ce.querySelector("p.content-input[contenteditable='true']") as HTMLElement | null
+    if (p && hasVisibleBox(p) && p.getBoundingClientRect().height > 22) return true
+  }
+  return false
+}
+
+/** 仅在展开态下取主评输入，避免未点开胶囊就往隐藏 contenteditable 里塞字 */
+function pickExpandedNoteMainCommentInput(): HTMLElement | null {
+  if (!isNoteMainCommentComposerExpanded()) return null
+  return pickMainInputDeep()
+}
+
+/** 点击胶囊后等待图二：展开 + 可编辑主输入出现 */
+async function waitForExpandedNoteCommentInput(timeoutMs: number): Promise<HTMLElement | null> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (isNoteMainCommentComposerExpanded()) {
+      const input = pickMainInputDeep()
+      if (input && !isInsideListCommentRow(input)) return input
+    }
+    await sleep(55)
+  }
+  return null
+}
+
+/**
+ * 用户提供的稳定路径：
+ * #noteContainer > .interaction-container > .interactions.engage-bar > … > .input-box > .content-edit > … > div.inner
+ */
+function findBottomCommentBarByEngagePath(): HTMLElement | null {
+  const nc = getNoteContainerEl()
+  if (!nc || isInsideListCommentRow(nc)) return null
+
+  const inputBox =
+    (nc.querySelector("div.interaction-container div.interactions.engage-bar div.input-box") as HTMLElement | null) ??
+    (nc.querySelector("div.interactions.engage-bar div.input-box") as HTMLElement | null) ??
+    (nc.querySelector(".interaction-container .interactions.engage-bar .input-box") as HTMLElement | null) ??
+    (nc.querySelector(".interactions.engage-bar .input-box") as HTMLElement | null) ??
+    (nc.querySelector(".engage-bar .input-box") as HTMLElement | null)
+
+  if (!inputBox || isInsideListCommentRow(inputBox) || !hasVisibleBox(inputBox)) return null
+
+  const contentEdit = inputBox.querySelector(".content-edit") as HTMLElement | null
+  if (!contentEdit) return inputBox
+
+  for (const div of Array.from(contentEdit.querySelectorAll(":scope div.inner"))) {
+    const h = div as HTMLElement
+    const kids = Array.from(h.children)
+    if (!kids.some(c => c.tagName === "IMG")) continue
+    const span = kids.find(c => c.tagName === "SPAN") as HTMLElement | undefined
+    if (!span || !NOTE_COMMENT_PLACEHOLDER_RE.test(innerTextCompact(span))) continue
+    if (hasVisibleBox(h)) return h
+  }
+
+  const nested = contentEdit.querySelector(":scope > div > div") as HTMLElement | null
+  if (nested && hasVisibleBox(nested) && !isInsideListCommentRow(nested)) return nested
+
+  const oneDiv = contentEdit.querySelector(":scope > div") as HTMLElement | null
+  if (oneDiv && hasVisibleBox(oneDiv)) return oneDiv
+
+  return hasVisibleBox(contentEdit) ? contentEdit : inputBox
+}
+
+function verifyNoteCommentCapsuleShape(h: HTMLElement): boolean {
+  const kids = Array.from(h.children)
+  if (!kids.some(c => c.tagName === "IMG")) return false
+  const span = kids.find(c => c.tagName === "SPAN") as HTMLElement | undefined
+  return span != null && NOTE_COMMENT_PLACEHOLDER_RE.test(innerTextCompact(span))
+}
+
+/**
+ * 只找底栏「胶囊」div.inner（头像 + 说点什么），不回落到整块 .content-edit，避免误点。
+ */
+function findNoteCommentCapsuleInnerStrict(): HTMLElement | null {
+  const nc = getNoteContainerEl()
+  if (!nc || isInsideListCommentRow(nc)) return null
+
+  const inputBox =
+    (nc.querySelector("div.interaction-container div.interactions.engage-bar div.input-box") as HTMLElement | null) ??
+    (nc.querySelector("div.interactions.engage-bar div.input-box") as HTMLElement | null) ??
+    (nc.querySelector(".interaction-container .interactions.engage-bar .input-box") as HTMLElement | null) ??
+    (nc.querySelector(".interactions.engage-bar .input-box") as HTMLElement | null) ??
+    (nc.querySelector(".engage-bar .input-box") as HTMLElement | null)
+
+  if (!inputBox || !hasVisibleBox(inputBox as HTMLElement)) return null
+  const contentEdit = inputBox.querySelector(".content-edit") as HTMLElement | null
+  if (!contentEdit) return null
+
+  const shell = contentEdit.querySelector(":scope .inner-when-not-active") as HTMLElement | null
+  if (shell) {
+    const innerInShell = shell.querySelector(":scope div.inner") as HTMLElement | null
+    if (
+      innerInShell &&
+      verifyNoteCommentCapsuleShape(innerInShell) &&
+      hasVisibleBox(innerInShell)
+    ) {
+      return innerInShell
+    }
+  }
+
+  for (const div of Array.from(contentEdit.querySelectorAll(":scope div.inner"))) {
+    const h = div as HTMLElement
+    if (!verifyNoteCommentCapsuleShape(h) || !hasVisibleBox(h)) continue
+    return h
+  }
+
+  const nested = contentEdit.querySelector(":scope > div > div") as HTMLElement | null
+  if (nested && verifyNoteCommentCapsuleShape(nested) && hasVisibleBox(nested)) return nested
+
+  return null
+}
+
+/**
+ * 与真人一致：只点胶囊上「说点什么」附近（elementFromPoint），必要时再点一次整块 inner。
+ * 不再连点 .content-edit / .engage-bar，那些容易在展开前抢走焦点导致大框不出现。
+ */
+async function tryClickCapsuleAsUserWould(inner: HTMLElement): Promise<void> {
+  const shell = inner.closest(".inner-when-not-active") as HTMLElement | null
+  try {
+    inner.scrollIntoView({ block: "nearest", behavior: "instant" })
+  } catch {
+    /* ignore */
+  }
+  await sleep(120)
+
+  // Vue 常把展开监听绑在带 not-active 的外壳上，先点外壳再点 inner/文案
+  if (shell && shell !== inner && hasVisibleBox(shell) && shell.classList.contains("not-active")) {
+    await syntheticClick(shell)
+    await sleep(90)
+  }
+
+  const r = inner.getBoundingClientRect()
+  // 偏右、避开左侧头像，落在占位文案上（与手点习惯一致）
+  const cx = Math.min(r.right - 6, Math.max(r.left + r.width * 0.42, r.left + 28))
+  const cy = r.top + r.height / 2
+
+  const hit = document.elementFromPoint(cx, cy)
+  if (hit instanceof HTMLElement && inner.contains(hit)) {
+    await syntheticClick(hit)
+    return
+  }
+  const span = Array.from(inner.children).find(c => c.tagName === "SPAN") as HTMLElement | undefined
+  if (span && hasVisibleBox(span)) {
+    await syntheticClick(span)
+    return
+  }
+  await syntheticClick(inner)
+}
+
+/** 主流程：只点笔记底栏胶囊（图一 → 图二） */
+async function tryClickNoteEngageBarPath(): Promise<boolean> {
+  const capsule = findNoteCommentCapsuleInnerStrict()
+  if (!capsule) {
+    const loose = findBottomCommentBarByEngagePath()
+    if (!loose) return false
+    await tryClickCapsuleAsUserWould(loose)
+    return true
+  }
+  await tryClickCapsuleAsUserWould(capsule)
+  return true
+}
+
+/** 兜底：多点外层（仅在前述「只点胶囊」多次仍失败时用） */
+async function tryClickNoteEngageBarPathAggressive(): Promise<boolean> {
+  const target = findBottomCommentBarByEngagePath()
+  if (!target) return false
+  try {
+    target.scrollIntoView({ block: "nearest", behavior: "instant" })
+  } catch {
+    /* ignore */
+  }
+  await sleep(100)
+  await syntheticClick(target)
+  await sleep(220)
+
+  const ce = target.closest(".content-edit") as HTMLElement | null
+  if (ce && ce !== target && !isInsideListCommentRow(ce)) {
+    const r = ce.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0 && r.height < 280) await syntheticClick(ce)
+  }
+  await sleep(200)
+
+  const ib = target.closest(".input-box") as HTMLElement | null
+  if (ib && ib !== target && ib !== ce && !isInsideListCommentRow(ib)) {
+    const r = ib.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0 && r.height < 280) await syntheticClick(ib)
+  }
+  await sleep(200)
+
+  const engage =
+    (target.closest(".interactions.engage-bar") as HTMLElement | null) ??
+    (target.closest(".engage-bar") as HTMLElement | null)
+  if (engage && !isInsideListCommentRow(engage)) {
+    const r = engage.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0 && r.height < 320) await syntheticClick(engage)
+  }
+  return true
+}
+
+function collectStructuredInnerBarCandidates(root: Document | HTMLElement): HTMLElement[] {
+  const candidates: HTMLElement[] = []
+  const vh = window.innerHeight || 800
+  const vw = window.innerWidth || 400
+  forEachElementDeep(root, (el) => {
+    const h = el as HTMLElement
+    if (h.tagName !== "DIV") return
+    if (isInsideListCommentRow(h)) return
+    if (!h.classList.contains("inner")) return
+    const kids = Array.from(h.children)
+    const hasImg = kids.some(c => c.tagName === "IMG")
+    const span = kids.find(c => c.tagName === "SPAN") as HTMLElement | undefined
+    if (!hasImg || !span) return
+    if (!NOTE_COMMENT_PLACEHOLDER_RE.test(innerTextCompact(span))) return
+    const r = h.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return
+    if (r.height > 200 || r.width > vw * 0.98) return
+    if (r.bottom < vh * 0.38) return
+    candidates.push(h)
+  })
+  return candidates
+}
+
+/**
+ * 当前版笔记底栏：`div.inner` > `img`（头像）+ `span`「说点什么...」
+ * 优先在 #noteContainer 内找，减少整页 `*` 扫描。
+ */
+function findBottomCommentBarStructuredDeep(): HTMLElement | null {
+  const pickLowest = (candidates: HTMLElement[]): HTMLElement | null => {
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => {
+      const ra = a.getBoundingClientRect()
+      const rb = b.getBoundingClientRect()
+      return rb.top + rb.height / 2 - (ra.top + ra.height / 2)
+    })
+    return candidates[0]
+  }
+  const nc = getNoteContainerEl()
+  if (nc) {
+    const fromNc = pickLowest(collectStructuredInnerBarCandidates(nc))
+    if (fromNc) return fromNc
+  }
+  return pickLowest(collectStructuredInnerBarCandidates(document))
+}
+
+function collectPlaceholderTriggerCandidates(root: Document | HTMLElement): HTMLElement[] {
+  const candidates: HTMLElement[] = []
+  forEachElementDeep(root, (el) => {
+    const h = el as HTMLElement
+    if (h.tagName === "SCRIPT" || h.tagName === "STYLE" || h.tagName === "SVG") return
+    if (isInsideListCommentRow(h)) return
+    const it = innerTextCompact(h)
+    if (it.length === 0 || it.length > 100) return
+    if (!NOTE_COMMENT_PLACEHOLDER_RE.test(it)) return
+    const r = h.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return
+    candidates.push(h)
+  })
+  return candidates
+}
+
+/**
+ * 在含 shadow 的树内找底部主评入口：用 innerText 避免 textContent 把子树拼成超长串误判。
+ * 优先 #noteContainer，再整页。
+ */
+function findBottomCommentTriggerDeep(): HTMLElement | null {
+  const refineBest = (candidates: HTMLElement[]): HTMLElement | null => {
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => {
+      const ra = a.getBoundingClientRect()
+      const rb = b.getBoundingClientRect()
+      const ca = ra.top + ra.height / 2
+      const cb = rb.top + rb.height / 2
+      return cb - ca
+    })
+    let best = candidates[0]
+    for (let up = 0; up < 6; up++) {
+      const parent = best.parentElement as HTMLElement | null
+      if (!parent || parent === document.body || isInsideListCommentRow(parent)) break
+      const pit = innerTextCompact(parent)
+      if (NOTE_COMMENT_PLACEHOLDER_RE.test(pit) && pit.length < 120) {
+        const pr = parent.getBoundingClientRect()
+        if (pr.height < 140) best = parent
+        else break
+      } else break
+    }
+    return best
+  }
+  const nc = getNoteContainerEl()
+  if (nc) {
+    const fromNc = refineBest(collectPlaceholderTriggerCandidates(nc))
+    if (fromNc) return fromNc
+  }
+  return refineBest(collectPlaceholderTriggerCandidates(document))
+}
+
+/** 在视口底部少量采样点上找可点击条（兜底；网格过大会拖慢主线程） */
+async function tryClickNoteCommentBarByCoordinates(): Promise<boolean> {
+  const w = window.innerWidth
+  const vh = window.innerHeight
+  const ys = [vh - 8, vh - 28, vh - 52, vh - 72]
+  const xs = [w * 0.28, w * 0.5, w * 0.72]
+
+  const tryHit = async (hit: Element | null): Promise<boolean> => {
+    if (!hit) return false
+    let el: Element | null = hit
+    for (let i = 0; i < 22 && el; i++) {
+      if (isInsideListCommentRow(el)) return false
+      const h = el as HTMLElement
+      const st = window.getComputedStyle(h)
+      if (st.pointerEvents === "none") {
+        el = el.parentElement
+        continue
+      }
+      const it = innerTextCompact(h)
+      if (NOTE_COMMENT_PLACEHOLDER_RE.test(it)) {
+        await syntheticClick(h)
+        return true
+      }
+      const r = h.getBoundingClientRect()
+      const wideBar = r.width > w * 0.26 && r.height > 16 && r.height < 110 && r.bottom > vh - 100
+      if (wideBar && (it.length === 0 || it.length < 48)) {
+        await syntheticClick(h)
+        return true
+      }
+      el = el.parentElement
+    }
+    return false
+  }
+
+  for (const y of ys) {
+    for (const x of xs) {
+      const hit = document.elementFromPoint(x, y)
+      if (await tryHit(hit)) return true
+    }
+  }
+  return false
+}
+
+async function syntheticClick(el: HTMLElement): Promise<void> {
+  const r = el.getBoundingClientRect()
+  const cx = r.left + Math.min(Math.max(r.width / 2, 8), r.width - 8)
+  const cy = r.top + r.height / 2
+  const opts: MouseEventInit = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, view: window }
+  const ptr: PointerEventInit = {
+    bubbles: true,
+    cancelable: true,
+    clientX: cx,
+    clientY: cy,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+  }
+  el.dispatchEvent(new PointerEvent("pointerdown", ptr))
+  el.dispatchEvent(new MouseEvent("mousedown", opts))
+  await sleep(25)
+  el.dispatchEvent(new PointerEvent("pointerup", ptr))
+  el.dispatchEvent(new MouseEvent("mouseup", opts))
+  el.dispatchEvent(new MouseEvent("click", opts))
+  el.click()
+}
+
+function writeToContentEditable(el: HTMLElement, text: string) {
+  el.focus()
+  el.textContent = ""
+  el.dispatchEvent(
+    new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: text,
+      bubbles: true,
+      cancelable: true,
+    })
+  )
+  document.execCommand("insertText", false, text)
+  if (!el.textContent) {
+    el.textContent = text
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  el.focus()
+}
+
 // 填入回复：找到对应评论节点 → 点击"回复"按钮 → 等输入框弹出 → 填入文字
 async function fillReply(platformCommentId: string, text: string): Promise<{ ok: boolean; error?: string }> {
-  // 找到页面上匹配的评论节点
   const nodes = Array.from(document.querySelectorAll(SELECTORS.commentList))
   const targetNode = nodes.find(n => extractCommentId(n) === platformCommentId)
 
@@ -505,7 +1029,6 @@ async function fillReply(platformCommentId: string, text: string): Promise<{ ok:
     return { ok: false, error: "comment_not_found" }
   }
 
-  // 找"回复"按钮：小红书用 div.reply.icon-container
   const replyBtn = (
     targetNode.querySelector(".reply.icon-container") ||
     Array.from(targetNode.querySelectorAll("div, span")).find(el => el.textContent?.trim() === "回复")
@@ -515,36 +1038,232 @@ async function fillReply(platformCommentId: string, text: string): Promise<{ ok:
     return { ok: false, error: "reply_btn_not_found" }
   }
 
-  // 点击"回复"展开输入框
   replyBtn.click()
 
-  // 等待输入框出现（小红书用 p.content-input[contenteditable="true"]）
   const input = await waitForElement('p.content-input[contenteditable="true"]', 2000)
 
   if (!input) {
     return { ok: false, error: "input_not_found" }
   }
 
-  const el = input as HTMLElement
-  el.focus()
-  el.textContent = ""
+  writeToContentEditable(input as HTMLElement, text)
+  return { ok: true }
+}
 
-  // 优先用现代 InputEvent（Chrome 60+），触发框架响应式更新
-  el.dispatchEvent(new InputEvent("beforeinput", {
-    inputType: "insertText",
-    data: text,
-    bubbles: true,
-    cancelable: true,
-  }))
-  // execCommand 已废弃但仍被 Chrome 支持，作为兜底确保文字实际插入
-  document.execCommand("insertText", false, text)
-  // 若两者都未写入（极少数环境），直接赋值并派发 input 事件
-  if (!el.textContent) {
-    el.textContent = text
-    el.dispatchEvent(new Event("input", { bubbles: true }))
+/** 主评输入框：light + shadow（按优先级取最像「主评」的控件） */
+function pickMainInputDeep(): HTMLElement | null {
+  const nc = getNoteContainerEl()
+  const engageCe = getEngageBarContentEditEl()
+  const skipEngagePBecauseCapsule =
+    Boolean(engageCe) && isNoteCommentCapsuleOverlayShowing()
+
+  if (nc && !skipEngagePBecauseCapsule) {
+    const scoped = [
+      ".interactions.engage-bar .input-box .content-edit p.content-input[contenteditable='true']",
+      ".engage-bar .input-box .content-edit p.content-input[contenteditable='true']",
+      ".interactions.engage-bar p.content-input[contenteditable='true']",
+      ".engage-bar p.content-input[contenteditable='true']",
+    ]
+    for (const sel of scoped) {
+      const el = nc.querySelector(sel) as HTMLElement | null
+      if (el && !isInsideListCommentRow(el) && hasVisibleBox(el)) return el
+    }
   }
 
-  el.focus()
+  let best: HTMLElement | null = null
+  let bestPri = 0
+  const consider = (h: HTMLElement) => {
+    if (isInsideListCommentRow(h)) return
+    const r = h.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return
+
+    let pri = 0
+    if (h.matches?.('p.content-input[contenteditable="true"]')) {
+      if (engageCe && engageCe.contains(h) && isNoteCommentCapsuleOverlayShowing()) pri = 0
+      else pri = 5
+    } else if (h.getAttribute?.("contenteditable") === "true") {
+      const cls = (h.className?.toString?.() ?? "").toLowerCase()
+      if (cls.includes("content-input")) pri = 4
+      else if (cls.includes("comment") && cls.includes("input")) pri = 3
+      else if (cls.includes("comment") || cls.includes("input")) pri = 2
+    } else if (h.tagName === "TEXTAREA") {
+      const ph = h.getAttribute("placeholder") ?? ""
+      if (NOTE_COMMENT_PLACEHOLDER_RE.test(ph) || ph.includes("评论")) pri = 3
+    }
+
+    if (pri > bestPri) {
+      bestPri = pri
+      best = h
+    }
+  }
+
+  if (nc) forEachElementDeep(nc, (el) => consider(el as HTMLElement))
+  // 高置信已在 noteContainer 找到则不再扫整页
+  if (bestPri < 5) {
+    forEachElementDeep(document, (el) => {
+      const h = el as HTMLElement
+      if (nc?.contains(h)) return
+      consider(h)
+    })
+  }
+  return best
+}
+
+/** 填入笔记下方「主评论」输入框（非回复某条评论） */
+async function fillNoteComment(text: string): Promise<{ ok: boolean; error?: string; step?: string }> {
+  /** 仅失败时便于侧栏/控制台区分卡在哪一步（主路径成功不返回 step） */
+  let lastPhase = "start"
+
+  const tryWrite = (el: HTMLElement): boolean => {
+    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+      const ta = el as HTMLTextAreaElement | HTMLInputElement
+      ta.focus()
+      ta.value = ""
+      ta.value = text
+      ta.dispatchEvent(new Event("input", { bubbles: true }))
+      ta.dispatchEvent(new Event("change", { bubbles: true }))
+      ta.focus()
+      return true
+    }
+    writeToContentEditable(el, text)
+    return true
+  }
+
+  /** 触发后必须等图二展开再取节点，禁止用「未展开也能 match 到的」contenteditable */
+  const waitForInputAfterTrigger = (timeoutMs: number) => waitForExpandedNoteCommentInput(timeoutMs)
+
+  const waitForInputFinalFallback = async (): Promise<HTMLElement | null> => {
+    let input = await waitForExpandedNoteCommentInput(3200)
+    if (input) return input
+    input = (await waitForElement('p.content-input[contenteditable="true"]', 600)) as HTMLElement | null
+    if (input && !isInsideListCommentRow(input) && isNoteMainCommentComposerExpanded()) return input
+    const deadline = Date.now() + 1400
+    while (Date.now() < deadline) {
+      const p = pickMainInputDeep()
+      if (p && !isInsideListCommentRow(p) && isNoteMainCommentComposerExpanded()) return p
+      await sleep(60)
+    }
+    return null
+  }
+
+  // 仅当已是图二展开态才直接写入（避免胶囊态误写）
+  let input = pickExpandedNoteMainCommentInput()
+  if (input) {
+    tryWrite(input)
+    return { ok: true }
+  }
+
+  lastPhase = "already_collapsed_try_engage"
+
+  // 0a-0) #noteContainer … engage-bar … input-box … content-edit（控制台给出的选择器链）
+  if (await tryClickNoteEngageBarPath()) {
+    await sleep(480)
+    input = await waitForInputAfterTrigger(2400)
+    if (input) {
+      tryWrite(input)
+      return { ok: true }
+    }
+    lastPhase = "after_engage_path_wait_empty"
+  }
+
+  // 0a) 结构匹配底栏：div.inner > img + span「说点什么...」
+  lastPhase = "try_structured_inner_bar"
+  const structuredBar = findBottomCommentBarStructuredDeep()
+  if (structuredBar) {
+    try {
+      structuredBar.scrollIntoView({ block: "nearest", behavior: "instant" })
+    } catch {
+      /* ignore */
+    }
+    await sleep(100)
+    await syntheticClick(structuredBar)
+    await sleep(200)
+    const outer = structuredBar.parentElement as HTMLElement | undefined
+    if (outer && !isInsideListCommentRow(outer)) {
+      const or = outer.getBoundingClientRect()
+      if (or.height > 0 && or.height < 200 && or.width > 80) await syntheticClick(outer)
+    }
+    await sleep(450)
+    input = await waitForInputAfterTrigger(2200)
+    if (input) {
+      tryWrite(input)
+      return { ok: true }
+    }
+    lastPhase = "after_structured_click_wait_empty"
+  }
+
+  // 0) 坐标兜底（第一轮）：占位在伪元素等场景
+  lastPhase = "coordinate_round_1"
+  await tryClickNoteCommentBarByCoordinates()
+  await sleep(450)
+  input = await waitForInputAfterTrigger(2000)
+  if (input) {
+    tryWrite(input)
+    return { ok: true }
+  }
+  lastPhase = "after_coordinate_round_1_wait_empty"
+
+  // 1) 文案匹配（含 shadow）+ 合成点击
+  lastPhase = "try_placeholder_text_trigger"
+  const trigger = findBottomCommentTriggerDeep()
+  if (trigger) {
+    try {
+      trigger.scrollIntoView({ block: "nearest", behavior: "instant" })
+    } catch {
+      /* ignore */
+    }
+    await sleep(120)
+    await syntheticClick(trigger)
+    await sleep(450)
+    const par = trigger.parentElement as HTMLElement | undefined
+    if (par && !isInsideListCommentRow(par) && NOTE_COMMENT_PLACEHOLDER_RE.test(innerTextCompact(par))) {
+      await syntheticClick(par)
+      await sleep(350)
+    }
+  }
+
+  input = await waitForInputAfterTrigger(2600)
+  if (input) {
+    tryWrite(input)
+    return { ok: true }
+  }
+  lastPhase = "after_text_trigger_wait_empty"
+
+  // 2) aggressive + 单次坐标兜底（合并原 2/3 轮坐标，减少重复 elementFromPoint 网格）
+  lastPhase = "aggressive_then_coordinate"
+  if (await tryClickNoteEngageBarPathAggressive()) await sleep(450)
+  const t2 = findBottomCommentTriggerDeep()
+  if (t2) {
+    await syntheticClick(t2)
+    await sleep(500)
+  }
+  await tryClickNoteCommentBarByCoordinates()
+  await sleep(400)
+
+  const commentSec =
+    document.querySelector("#note-comment") ||
+    document.querySelector("[class*='comment-container']") ||
+    document.querySelector("[class*='interactions']") ||
+    document.querySelector("[class*='engage']")
+  try {
+    ;(commentSec as HTMLElement)?.scrollIntoView({ block: "end", behavior: "instant" })
+  } catch {
+    /* ignore */
+  }
+  await sleep(300)
+  if (await tryClickNoteEngageBarPathAggressive()) await sleep(400)
+  const t3s = findBottomCommentBarStructuredDeep()
+  if (t3s) await syntheticClick(t3s)
+  await sleep(250)
+  const t3 = findBottomCommentTriggerDeep()
+  if (t3) await syntheticClick(t3)
+  await sleep(500)
+  lastPhase = "final_fallback_wait"
+  input = await waitForInputFinalFallback()
+
+  if (!input) return { ok: false, error: "note_input_not_found", step: lastPhase }
+
+  tryWrite(input)
   return { ok: true }
 }
 
@@ -567,6 +1286,8 @@ function waitForElement(selector: string, timeoutMs: number): Promise<Element | 
     }, timeoutMs)
   })
 }
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 // 滚动联动：左侧小红书评论滚动时，找到视口中央那条评论，通知右侧侧边栏同步滚动
 let scrollSyncTick: number | null = null
@@ -664,10 +1385,11 @@ async function getAllPageComments(): Promise<ScrapedComment[]> {
   return results
 }
 
-// 帖子标题与正文，用于 AI 回复上下文
-function getPostContent(): { postTitle: string; postContent: string } {
+// 帖子标题与正文、当前 URL，用于 AI 回复 / 笔记跟评
+function getPostContent(): { postTitle: string; postContent: string; postUrl: string } {
   let postTitle = ""
   let postContent = ""
+  const postUrl = typeof location !== "undefined" ? location.href : ""
   try {
     const state = (window as unknown as { __INITIAL_STATE__?: Record<string, unknown> }).__INITIAL_STATE__
     if (state) {
@@ -688,7 +1410,7 @@ function getPostContent(): { postTitle: string; postContent: string } {
     const el = document.querySelector('[class*="desc"]') ?? document.querySelector('[class*="content"]')
     postContent = (el?.textContent ?? "").trim().slice(0, 2000)
   }
-  return { postTitle, postContent }
+  return { postTitle, postContent, postUrl }
 }
 
 // 监听来自 background 的填入指令与数据查询
@@ -696,6 +1418,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "FILL_REPLY") {
     const { platformCommentId, text } = message.payload
     fillReply(platformCommentId, text).then(sendResponse)
+    return true
+  }
+  if (message.type === "FILL_NOTE_COMMENT") {
+    const { text } = message.payload as { text: string }
+    fillNoteComment(text).then(sendResponse)
     return true
   }
   if (message.type === "GET_ALL_PAGE_COMMENTS") {

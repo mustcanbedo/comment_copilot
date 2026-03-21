@@ -63,7 +63,7 @@ flowchart LR
 | `/api/saved-replies/:id` | DELETE | 删除存言（需 JWT + x-tenant-id） |
 | `/api/selectors` | GET | 平台 DOM 选择器配置 |
 | `/api/ai/reply` | POST | AI 回复生成（DeepSeek，扣积分，需 JWT + x-tenant-id） |
-| `/api/ai/note-comment` | POST | **规划中**：笔记主跟评文案生成（契约见 [plan-note-comment-api-independent-route.md](plan-note-comment-api-independent-route.md)） |
+| `/api/ai/note-comment` | POST | 笔记主跟评文案生成（DeepSeek，扣积分；契约见 [plan-note-comment-api-independent-route.md](plan-note-comment-api-independent-route.md)） |
 | `/api/settings/persona` | GET/POST | 人设读取/保存（需 JWT） |
 
 ### 2.2 数据库与迁移
@@ -83,7 +83,7 @@ flowchart LR
 | `/api/auth/me` | GET | JWT Bearer | — | `{ ok, user: { id, email, name }, points: { freeBalance, freeQuota, topupBalance, total } }` |
 | `/api/ingest/comments` | POST | JWT + x-tenant-id | `{ platform, comments[] }` 每项含 `platformCommentId`, `authorName`, `content`, `commentedAt`, `postUrl?`, `isAuthorReply?` | `{ ok, saved, skipped }` |
 | `/api/ai/reply` | POST | JWT + x-tenant-id | `{ commentId, commentContent, persona?, postTitle?, postContent? }` | `{ ok, suggestions[] }`；积分不足返回 402；**handler 内不写库** |
-| `/api/ai/note-comment` | POST | JWT + x-tenant-id | 见 plan 文档 | 与 `reply` 成功体一致；**待实现** |
+| `/api/ai/note-comment` | POST | JWT + x-tenant-id | `{ postUrl?, postTitle?, postContent?, persona?, style? }`（三者不能全空） | `{ ok, suggestions[] }`；积分不足 402；**handler 内不写库** |
 | `/api/comments` | GET | JWT + x-tenant-id | Query: `intent`, `status`, `postUrl`, `limit` | `{ ok, data: Comment[], total }` |
 | `/api/comments/mark-replied` | POST | JWT + x-tenant-id | `{ commentId }` | `{ ok }` |
 | `/api/saved-replies` | GET | JWT + x-tenant-id | Query: `category`, `search`, `limit` | `{ ok, data: SavedReply[] }` |
@@ -120,6 +120,15 @@ Sidepanel / Background → POST /api/ai/reply (JWT + x-tenant-id)
 ```
 
 > **说明**：当前 `Reply` handler **不**写入 `ai_replies`、**不**更新 `comments.status`。评论「已回复」若需与后端一致，见插件侧本地方案与后续 [todo_v1_reply_status_sync.md](todo_v1_reply_status_sync.md)；可选调用 `POST /api/comments/mark-replied`。
+
+### 4.2b 笔记跟评（与 `ai_handler.NoteComment` + 扩展智言「笔记跟评」一致）
+
+```
+Sidepanel → GET_POST_CONTENT（content：标题/正文/postUrl）
+  → Background → POST /api/ai/note-comment (JWT + x-tenant-id)
+  → 扣积分 / DeepSeek / 解析 suggestions（与 reply 类似）
+  → 用户点「评论」→ FILL_NOTE_COMMENT → content script 写入笔记下方主评论输入（非回复某条评论）
+```
 
 ### 4.3 标记评论已回复
 

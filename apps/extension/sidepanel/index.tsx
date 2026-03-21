@@ -1,8 +1,46 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Storage } from "@plasmohq/storage"
-import { API_BASE, DEFAULT_TENANT_ID, FEEDBACK_URL, YANLING_XHS_SELF_NICK_STORAGE_KEY } from "../constants"
-import LoginView, { AUTH_TOKEN_KEY } from "./login-view"
+import {
+  API_BASE,
+  AUTH_TOKEN_KEY,
+  DEFAULT_TENANT_ID,
+  FEEDBACK_URL,
+  isXhsNotePageUrl,
+  YANLING_XHS_SELF_NICK_STORAGE_KEY,
+} from "../constants"
+import lianxiQrPng from "../assets/lianxi.png"
+import LoginView from "./login-view"
 import "./style.css"
+
+/**
+ * `chrome.runtime.sendMessage` 在常见 Chrome 环境下不向调用方返回 Promise；
+ * 直接 `await sendMessage(...)` 会得到 `undefined`，background 里 `sendResponse` 的结果传不回侧栏，网络请求看似「从未发起」。
+ */
+function runtimeSendMessage<T = unknown>(message: object): Promise<T> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        const err = chrome.runtime.lastError
+        if (err) {
+          reject(new Error(err.message))
+          return
+        }
+        resolve(response as T)
+      })
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
+/** Background 对 AI 接口统一解析后的结果（含 HTTP/body 失败与 code） */
+type AiGenResult = { ok?: boolean; error?: string; message?: string; code?: string; suggestions?: string[] }
+
+function aiGenerationErrorMessage(result: AiGenResult | null | undefined): string | undefined {
+  if (!result || result.ok !== false) return undefined
+  // Background 已对积分不足、英文错误码做中文映射；此处仅兜底
+  return result.error || result.message || "生成失败"
+}
 
 const LANGUAGES = [{ code: "zh-CN", label: "简体中文" }] as const
 
@@ -109,6 +147,9 @@ type Filter = "all" | "pending" | "hot"
 
 type Nav = "account" | "zhiyan" | "cunyan" | "settings"
 
+/** 存言去重/展示用：笔记主评论 AI 建议不关联单条评论 */
+const NOTE_COMMENT_SAVE_SNIPPET = "笔记跟评"
+
 function applyFilter(list: Comment[], filter: Filter): Comment[] {
   if (filter === "hot") return list.filter(c => c.intentLevel === "hot")
   if (filter === "pending") return list.filter(c => c.status !== "done" && c.status !== "replied")
@@ -163,6 +204,13 @@ function ZhiyanPage(props: {
     onGoToAccount: () => void
     onDismiss: () => void
   }
+  /** 当前标签是否为小红书笔记详情页 */
+  tabIsXhsNote: boolean
+  /** 笔记下方「主评论」AI（/api/ai/note-comment） */
+  noteCommentAi: AiState
+  generateNoteComment: () => void
+  fillNoteSuggestion: (text: string, index: number) => void
+  toggleSaveNoteReply: (text: string) => void
 }) {
   const {
     allComments,
@@ -185,35 +233,165 @@ function ZhiyanPage(props: {
     pendingCount,
     setFilter,
     xhsNickHint,
+    tabIsXhsNote,
+    noteCommentAi,
+    generateNoteComment,
+    fillNoteSuggestion,
+    toggleSaveNoteReply,
   } = props
+
+  const [noteCommentExpanded, setNoteCommentExpanded] = useState(() => {
+    try {
+      return localStorage.getItem("yanling_note_comment_expanded") === "1"
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("yanling_note_comment_expanded", noteCommentExpanded ? "1" : "0")
+    } catch {
+      /* ignore */
+    }
+  }, [noteCommentExpanded])
 
   return (
     <>
-      <div className="stats-row">
-        <div className="stat-item">
-          <span className="stat-num">{allComments.length}</span>
-          <span className="stat-label">全部</span>
+      <div className={`zhiyan-note-comment-card ${tabIsXhsNote ? "" : "zhiyan-note-comment-card--inactive"}`}>
+        <div className="zhiyan-note-comment-toolbar">
+          <button
+            type="button"
+            className="zhiyan-note-comment-title-area"
+            onClick={() => setNoteCommentExpanded(v => !v)}
+            aria-expanded={noteCommentExpanded}
+          >
+            <div className="zhiyan-note-comment-head-text">
+              <span className="zhiyan-note-comment-title">笔记跟评</span>
+              {noteCommentExpanded ? (
+                <span className="zhiyan-note-comment-sub">发在笔记下的主评论，非回复某条评论</span>
+              ) : null}
+            </div>
+          </button>
+          <div className="zhiyan-note-comment-toolbar-actions">
+            <button
+              type="button"
+              className="zhiyan-note-comment-chevron-btn"
+              onClick={() => setNoteCommentExpanded(v => !v)}
+              aria-label={noteCommentExpanded ? "收起笔记跟评" : "展开笔记跟评"}
+            >
+              <svg
+                className={`zhiyan-note-comment-chevron-icon ${noteCommentExpanded ? "zhiyan-note-comment-chevron-icon--up" : ""}`}
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <div className="stat-item hot">
-          <span className="stat-num">{hotCount}</span>
-          <span className="stat-label">🔥 高意向</span>
-        </div>
-        <div className="stat-item">
-          <span className="stat-num">{pendingCount}</span>
-          <span className="stat-label">🕐 待处理</span>
-        </div>
+        {!noteCommentExpanded && noteCommentAi.loading ? (
+          <p className="zhiyan-note-comment-collapsed-hint">AI 思考中…</p>
+        ) : null}
+        {noteCommentExpanded ? (
+          !tabIsXhsNote ? (
+            <p className="zhiyan-note-comment-hint">
+              请在小红书<strong>笔记详情页</strong>使用此功能（地址栏含 <code>/explore/</code> 或 <code>/discovery/item/</code>）
+            </p>
+          ) : (
+            <>
+              {!noteCommentAi.loading &&
+                !noteCommentAi.error &&
+                noteCommentAi.suggestions.length === 0 && (
+                  <button type="button" className="zhiyan-note-comment-generate" onClick={generateNoteComment}>
+                    ✨ 生成AI评论
+                  </button>
+                )}
+              {noteCommentAi.loading && <div className="ai-loading zhiyan-note-comment-loading">AI 思考中…</div>}
+              {noteCommentAi.error && (
+                <div className="ai-error-row">
+                  <span className="ai-error">{noteCommentAi.error}</span>
+                  <button type="button" className="retry-btn" onClick={generateNoteComment}>
+                    重试
+                  </button>
+                </div>
+              )}
+              {noteCommentAi.suggestions.length > 0 && (
+                <div className="suggestions zhiyan-note-suggestions">
+                  {noteCommentAi.suggestions.map((s, i) => {
+                    const isSaved = savedReplies.some(
+                      r => r.text === s && r.fromComment === NOTE_COMMENT_SAVE_SNIPPET
+                    )
+                    return (
+                      <div key={i} className="suggestion-item">
+                        <p className="suggestion-text">{s}</p>
+                        <div className="suggestion-actions">
+                          <button
+                            type="button"
+                            className={`fav-btn ${isSaved ? "favored" : ""}`}
+                            onClick={() => toggleSaveNoteReply(s)}
+                          >
+                            {isSaved ? "★ 已收藏" : "☆ 收藏"}
+                          </button>
+                          <button
+                            type="button"
+                            className={`copy-btn ${noteCommentAi.copied === i ? "copied" : ""}`}
+                            onClick={() => fillNoteSuggestion(s, i)}
+                          >
+                            {noteCommentAi.copied === i ? "✅ 已填入" : "评论"}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <button type="button" className="regenerate-btn" onClick={generateNoteComment}>
+                    重新生成
+                  </button>
+                </div>
+              )}
+            </>
+          )
+        ) : null}
       </div>
 
-      <div className="filter-row">
-        {(["all", "hot", "pending"] as const).map(f => (
-          <button
-            key={f}
-            className={`filter-btn ${filter === f ? "active" : ""}`}
-            onClick={() => setFilter(f)}
-          >
-            {f === "all" ? "全部" : f === "hot" ? "🔥 高意向" : "🕐 待处理"}
-          </button>
-        ))}
+      <div className="stats-row" role="tablist" aria-label="评论筛选">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "all"}
+          className={`stat-item ${filter === "all" ? "stat-item--active" : ""}`}
+          onClick={() => setFilter("all")}
+        >
+          <span className="stat-num">{allComments.length}</span>
+          <span className="stat-label">全部</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "hot"}
+          className={`stat-item hot ${filter === "hot" ? "stat-item--active" : ""}`}
+          onClick={() => setFilter("hot")}
+        >
+          <span className="stat-num">{hotCount}</span>
+          <span className="stat-label">🔥 高意向</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "pending"}
+          className={`stat-item ${filter === "pending" ? "stat-item--active" : ""}`}
+          onClick={() => setFilter("pending")}
+        >
+          <span className="stat-num">{pendingCount}</span>
+          <span className="stat-label">🕐 待处理</span>
+        </button>
       </div>
 
       {xhsNickHint?.show && (
@@ -578,6 +756,9 @@ function AccountPage({
               <span className="account-points-muted">{topUpBalance.toLocaleString()}</span>
             </div>
           </div>
+          <div className="account-contact-qr-wrap">
+            <img src={lianxiQrPng} alt="联系客服微信" className="account-contact-qr" width={176} height={176} />
+          </div>
           <button type="button" className="account-topup-btn">+ 充值积分</button>
         </div>
       </div>
@@ -742,6 +923,10 @@ function SidePanel() {
   const xhsNeedSupplementHintRef = useRef(false)
   xhsNeedSupplementHintRef.current = xhsNeedSupplementHint
   const [xhsBannerDismissed, setXhsBannerDismissed] = useState(false)
+  /** 当前浏览器标签是否为小红书笔记详情页（用于「笔记跟评」） */
+  const [tabIsXhsNote, setTabIsXhsNote] = useState(false)
+  const [noteCommentAi, setNoteCommentAi] = useState<AiState>({ loading: false, suggestions: [], copied: null })
+  const noteCommentInflightRef = useRef(false)
 
   /** 仅迁移驭灵旧版「小红书昵称」到 chrome.local（不再用后端账号名自动写入，避免与真实小红书昵称不一致） */
   const syncXhsNickFromAccountAndLegacy = useCallback(async () => {
@@ -808,6 +993,13 @@ function SidePanel() {
     return () => clearTimeout(t)
   }, [])
 
+  /** Token 失效：清登录态（AI /auth/me 等返回 401 时共用） */
+  const sessionExpiredLogout = useCallback(async () => {
+    await storage.remove(AUTH_TOKEN_KEY)
+    setIsLoggedIn(false)
+    setUserProfile(null)
+  }, [])
+
   const fetchUserProfile = useCallback(async (): Promise<void> => {
     if (!isLoggedIn) return
     try {
@@ -821,9 +1013,8 @@ function SidePanel() {
         },
       })
       if (!res.ok) {
-        if (res.status === 401) {
-          await storage.remove(AUTH_TOKEN_KEY)
-          setIsLoggedIn(false)
+        if (res.status === 401 || res.status === 403) {
+          void sessionExpiredLogout()
         }
         return
       }
@@ -847,7 +1038,7 @@ function SidePanel() {
     } catch {
       // 静默失败
     }
-  }, [isLoggedIn, syncXhsNickFromAccountAndLegacy])
+  }, [isLoggedIn, sessionExpiredLogout, syncXhsNickFromAccountAndLegacy])
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -992,13 +1183,16 @@ function SidePanel() {
     })
   }, [filteredComments])
 
-  useEffect(() => {
+  // 依赖 activeNav：从存言/灵主等切回智言时会新挂载 comment-list，须重新绑定 scroll；
+  // 否则监听仍挂在已卸载的 DOM 上，visibleRange/start 滞留，topHeight 撑出大块空白。
+  useLayoutEffect(() => {
+    if (activeNav !== "zhiyan") return
     updateVisibleRange()
     const container = listContainerRef.current
     if (!container) return
     container.addEventListener("scroll", updateVisibleRange, { passive: true })
     return () => container.removeEventListener("scroll", updateVisibleRange)
-  }, [filteredComments, updateVisibleRange])
+  }, [activeNav, filteredComments, updateVisibleRange])
 
   // 筛选为「高意向/待处理」时页面滚动联动：先切到「全部」后在此 effect 里完成定位
   useEffect(() => {
@@ -1023,15 +1217,24 @@ function SidePanel() {
   const clearPost = useCallback(() => {
     setComments([])
     setAiStates({})
+    setNoteCommentAi({ loading: false, suggestions: [], copied: null })
     dbInfoRef.current = new Map()
     itemHeightsRef.current = {}
     setVisibleRange({ start: 0, end: 20 })
     setSwitching(true)
   }, [])
 
-  const isNotePage = useCallback((url?: string) => {
-    return Boolean(url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url))
-  }, [])
+  const isNotePage = useCallback((url?: string) => isXhsNotePageUrl(url), [])
+
+  // 侧栏打开时同步当前标签是否笔记页（无 URL_CHANGED 时也能显示「笔记跟评」）
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.query) return
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) return
+      const url = tabs[0]?.url ?? ""
+      setTabIsXhsNote(isXhsNotePageUrl(url))
+    })
+  }, [isLoggedIn])
 
   // ─── 拉取评论（页面主导 + DB 补充，两路并行）─────────────────────────────
   // 存全部评论；筛选在 UI 层 applyFilter，不触发重复请求。
@@ -1051,7 +1254,7 @@ function SidePanel() {
 
       const [pageResult, dbResult] = await Promise.allSettled([
         // 1. 从 content script 拿页面全量评论（顺序与小红书一致）
-        chrome.runtime.sendMessage({ type: "GET_ALL_PAGE_COMMENTS" }),
+        runtimeSendMessage<PageComment[]>({ type: "GET_ALL_PAGE_COMMENTS" }),
         // 2. 拉 DB 补充信息（status / intentLevel / UUID）
         (async () => {
           const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -1107,12 +1310,18 @@ function SidePanel() {
 
   // ─── 消息监听 ────────────────────────────────────────────────────────────
   useEffect(() => {
-    const handler = (msg: { type: string; payload?: { platformCommentId: string } }) => {
-      if (msg.type === "URL_CHANGED" || msg.type === "PAGE_LEFT_NOTE") {
+    const handler = (msg: { type: string; payload?: { platformCommentId: string; url?: string } }) => {
+      if (msg.type === "URL_CHANGED") {
+        const url = msg.payload?.url ?? ""
+        setTabIsXhsNote(isXhsNotePageUrl(url))
         clearPost()
         setXhsNeedSupplementHint(false)
-        // 同一链接再次进入时 content 会发 URL_CHANGED 并重扫；延迟拉取确保能拿到 GET_ALL_PAGE_COMMENTS
-        if (msg.type === "URL_CHANGED") setTimeout(fetchComments, 2000)
+        setTimeout(fetchComments, 2000)
+      }
+      if (msg.type === "PAGE_LEFT_NOTE") {
+        setTabIsXhsNote(false)
+        clearPost()
+        setXhsNeedSupplementHint(false)
       }
 
       if (msg.type === "COMMENTS_UPDATED") {
@@ -1160,12 +1369,12 @@ function SidePanel() {
 
   // 切换标签时：非笔记页则清空；是笔记页则主动拉评论（解决同一链接再次进入或切回该标签时不显示评论）
   useEffect(() => {
-    const isNotePage = (url?: string) => url?.includes("xiaohongshu.com") && /\/explore\/[a-zA-Z0-9]+/.test(url ?? "")
-
     const onActivated = (info: chrome.tabs.TabActiveInfo) => {
       chrome.tabs.get(info.tabId, (tab) => {
         if (chrome.runtime.lastError) return
-        if (!isNotePage(tab.url)) clearPost()
+        const note = isXhsNotePageUrl(tab.url)
+        setTabIsXhsNote(note)
+        if (!note) clearPost()
         else fetchComments()
       })
     }
@@ -1182,21 +1391,21 @@ function SidePanel() {
 
     setAiStates(prev => ({ ...prev, [comment.id]: { loading: true, suggestions: [], copied: null } }))
     try {
-      const post = await new Promise<{ postTitle: string; postContent: string }>((resolve) => {
-        chrome.runtime.sendMessage({ type: "GET_POST_CONTENT" }, (res: { postTitle?: string; postContent?: string }) => {
-          resolve({ postTitle: res?.postTitle ?? "", postContent: res?.postContent ?? "" })
-        })
+      const post = await runtimeSendMessage<{ postTitle?: string; postContent?: string; postUrl?: string }>({
+        type: "GET_POST_CONTENT",
       })
-      const result = await chrome.runtime.sendMessage({
+      const postTitle = post?.postTitle ?? ""
+      const postContent = post?.postContent ?? ""
+      const result = await runtimeSendMessage<AiGenResult>({
         type: "GET_AI_REPLY",
         payload: {
           commentId: comment.id,
           commentContent: comment.content,
-          postTitle: post.postTitle,
-          postContent: post.postContent,
+          postTitle,
+          postContent,
         },
       })
-      const errorMsg = result?.ok === false ? (result.error || result.message || "生成失败") : undefined
+      const errorMsg = aiGenerationErrorMessage(result)
       setAiStates(prev => ({
         ...prev,
         [comment.id]: {
@@ -1206,6 +1415,9 @@ function SidePanel() {
           error: errorMsg,
         },
       }))
+      if (result?.code === "AUTH_REQUIRED") {
+        void sessionExpiredLogout()
+      }
       if (result?.ok && result?.suggestions?.length) {
         fetchUserProfile() // 扣费成功，刷新积分展示
       }
@@ -1217,12 +1429,67 @@ function SidePanel() {
     } finally {
       inflightRef.current.delete(comment.id)
     }
-  }, [fetchUserProfile])
+  }, [fetchUserProfile, sessionExpiredLogout])
+
+  const generateNoteComment = useCallback(async () => {
+    if (noteCommentInflightRef.current) return
+    noteCommentInflightRef.current = true
+    setNoteCommentAi({ loading: true, suggestions: [], copied: null })
+    try {
+      const post = await runtimeSendMessage<{ postTitle?: string; postContent?: string; postUrl?: string }>({
+        type: "GET_POST_CONTENT",
+      })
+      const result = await runtimeSendMessage<AiGenResult>({
+        type: "GET_AI_NOTE_COMMENT",
+        payload: {
+          postUrl: post?.postUrl ?? "",
+          postTitle: post?.postTitle ?? "",
+          postContent: post?.postContent ?? "",
+        },
+      })
+      const errorMsg = aiGenerationErrorMessage(result)
+      setNoteCommentAi({
+        loading: false,
+        suggestions: result?.suggestions ?? [],
+        copied: null,
+        error: errorMsg,
+      })
+      if (result?.code === "AUTH_REQUIRED") {
+        void sessionExpiredLogout()
+      }
+      if (result?.ok && result?.suggestions?.length) {
+        void fetchUserProfile()
+      }
+    } catch {
+      setNoteCommentAi({ loading: false, suggestions: [], copied: null, error: "请求失败" })
+    } finally {
+      noteCommentInflightRef.current = false
+    }
+  }, [fetchUserProfile, sessionExpiredLogout])
+
+  const fillNoteSuggestion = useCallback(async (text: string, index: number) => {
+    setNoteCommentAi(prev => ({ ...prev, copied: index }))
+    try {
+      const res = await runtimeSendMessage<{ ok?: boolean; error?: string }>({
+        type: "FILL_NOTE_COMMENT",
+        payload: { text },
+      })
+      if (!res?.ok) {
+        await navigator.clipboard.writeText(text)
+        console.warn("[CommentCopilot] fillNoteComment:", res?.error, (res as { step?: string })?.step ?? "")
+      }
+    } catch {
+      await navigator.clipboard.writeText(text)
+    }
+    setTimeout(() => {
+      setNoteCommentAi(prev => ({ ...prev, copied: null }))
+    }, 2000)
+  }, [])
 
   const fillReply = useCallback(async (comment: Comment, text: string, index: number) => {
     setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: index } }))
     try {
-      const res = await chrome.runtime.sendMessage({
+      const res = await runtimeSendMessage<{ ok?: boolean; error?: string }>({
         type: "FILL_REPLY",
         payload: { platformCommentId: comment.platformCommentId, text },
       })
@@ -1240,7 +1507,7 @@ function SidePanel() {
       prev.map(c => (c.id === comment.id ? { ...c, status: "replied" } : c))
     )
     try {
-      const res = await chrome.runtime.sendMessage({
+      const res = await runtimeSendMessage<{ ok?: boolean }>({
         type: "MARK_COMMENT_REPLIED",
         payload: {
           platformCommentId: comment.platformCommentId,
@@ -1338,6 +1605,69 @@ function SidePanel() {
     [userProfile?.id, savedReplies]
   )
 
+  const toggleSaveNoteReply = useCallback(
+    async (text: string) => {
+      if (!userProfile?.id) return
+      const existing = savedReplies.find(r => r.text === text && r.fromComment === NOTE_COMMENT_SAVE_SNIPPET)
+
+      if (existing) {
+        try {
+          const token = await storage.get<string>(AUTH_TOKEN_KEY)
+          const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+          if (token) {
+            await fetch(`${API_BASE}/saved-replies/${existing.id}`, {
+              method: "DELETE",
+              headers: {
+                "x-tenant-id": tenantId,
+                Authorization: `Bearer ${token}`,
+              },
+            })
+          }
+        } catch {
+          /* ignore */
+        }
+        setSavedReplies(prev => prev.filter(r => r.id !== existing.id))
+      } else {
+        try {
+          const token = await storage.get<string>(AUTH_TOKEN_KEY)
+          const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
+          if (!token) return
+          const res = await fetch(`${API_BASE}/saved-replies`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-tenant-id": tenantId,
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              text,
+              fromCommentId: "note-main",
+              fromCommentSnippet: NOTE_COMMENT_SAVE_SNIPPET,
+              category: "默认",
+            }),
+          })
+          const data = await res.json()
+          if (data?.ok && data?.data) {
+            const d = data.data
+            setSavedReplies(prev => [
+              {
+                id: d.id,
+                text: d.text,
+                fromComment: d.fromComment ?? NOTE_COMMENT_SAVE_SNIPPET,
+                createdAt: d.createdAt,
+                category: d.category ?? "默认",
+              },
+              ...prev,
+            ])
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [userProfile?.id, savedReplies]
+  )
+
   const handleLogout = useCallback(async () => {
     await storage.remove(AUTH_TOKEN_KEY)
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
@@ -1346,6 +1676,7 @@ function SidePanel() {
       })
     }
     setXhsNeedSupplementHint(false)
+    setNoteCommentAi({ loading: false, suggestions: [], copied: null })
     setIsLoggedIn(false)
     setUserProfile(null)
   }, [])
@@ -1487,6 +1818,11 @@ function SidePanel() {
                   }
                 : undefined
             }
+            tabIsXhsNote={tabIsXhsNote}
+            noteCommentAi={noteCommentAi}
+            generateNoteComment={generateNoteComment}
+            fillNoteSuggestion={fillNoteSuggestion}
+            toggleSaveNoteReply={toggleSaveNoteReply}
           />
         )}
 
@@ -1507,11 +1843,21 @@ function SidePanel() {
       <aside className="main-nav">
         <button
           type="button"
-          className={`nav-avatar ${activeNav === "account" ? "active" : ""}`}
+          className={`nav-btn ${activeNav === "account" ? "active" : ""}`}
           onClick={() => setActiveNav("account")}
           title="灵主"
         >
-          我
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+            <circle cx="12" cy="9" r="3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M6 19.5v-.5a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v.5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span>灵主</span>
         </button>
         <div className="nav-divider" />
         <button

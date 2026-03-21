@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react"
-import { API_BASE } from "../constants"
+import { API_BASE, AUTH_TOKEN_KEY } from "../constants"
 import { LegalModal } from "./legal-modal"
 import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal-content"
 import "./style.css"
-
-const AUTH_TOKEN_KEY = "authToken"
 
 interface LoginViewProps {
   onSuccess: (token: string) => void
@@ -253,5 +251,3 @@ export default function LoginView({ onSuccess, apiBase = API_BASE.replace("/api"
     </div>
   )
 }
-
-export { AUTH_TOKEN_KEY }

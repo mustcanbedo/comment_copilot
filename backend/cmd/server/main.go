@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"comment-copilot-web-backend/internal/config"
 	"comment-copilot-web-backend/internal/db"
@@ -57,6 +58,11 @@ func main() {
 	})
 
 	log.Printf("Go backend running at http://localhost:%s/api", cfg.Port)
+	for _, route := range router.Routes() {
+		if strings.Contains(route.Path, "/api/ai") {
+			log.Printf("  route %s %s", route.Method, route.Path)
+		}
+	}
 	log.Fatal(router.Run(":" + cfg.Port))
 }
 
