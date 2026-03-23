@@ -6,11 +6,12 @@
     "dev": "plasmo dev --hmr-host=localhost --hmr-port=1815",
     "dev:prod": "plasmo dev --env=.env.production --hmr-host=localhost --hmr-port=1815",
     "build": "plasmo build",
-    "package": "plasmo package"
+    "package": "plasmo package",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@plasmohq/storage": "^1.13.0",
-    "lodash": "^4.17.23",
     "plasmo": "^0.86.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
@@ -18,22 +19,25 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.300",
-    "@types/lodash": "^4.17.24",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.5"
   },
   "manifest": {
     "name": "言灵 Yanling",
-    "description": "小红书评论区 AI 助手 —— 用 AI 回评论，点燃言灵力",
+    "description": "小红书 / 哔哩哔哩 / 抖音 等评论区 AI 助手 —— 用 AI 回评论，点燃言灵力",
     "permissions": [
       "storage",
       "activeTab",
       "sidePanel",
+      "scripting",
       "tabs"
     ],
     "host_permissions": [
       "https://www.xiaohongshu.com/*",
+      "https://www.bilibili.com/*",
+      "https://bilibili.com/*",
       "https://www.douyin.com/*",
       "http://localhost:3000/*",
       "http://47.103.100.114:13000/*"

@@ -3,9 +3,15 @@ import { Storage } from "@plasmohq/storage"
 import {
   API_BASE,
   AUTH_TOKEN_KEY,
+  canonicalDouyinPostUrl,
+  commentCopilotPlatformFromUrl,
+  commentCopilotTabFetchDedupeKey,
   DEFAULT_TENANT_ID,
   FEEDBACK_URL,
-  isXhsNotePageUrl,
+  getCommentCopilotPageKind,
+  isCommentCopilotPageUrl,
+  type CommentCopilotPageKind,
+  YANLING_DOUYIN_SELF_NICK_STORAGE_KEY,
   YANLING_XHS_SELF_NICK_STORAGE_KEY,
 } from "../constants"
 import lianxiQrPng from "../assets/lianxi.png"
@@ -16,6 +22,11 @@ import "./style.css"
  * `chrome.runtime.sendMessage` 在常见 Chrome 环境下不向调用方返回 Promise；
  * 直接 `await sendMessage(...)` 会得到 `undefined`，background 里 `sendResponse` 的结果传不回侧栏，网络请求看似「从未发起」。
  */
+/** 抖音页：侧栏不弹出操作类 toast（仍复制剪贴板、控制台可排查） */
+function isDouyinTabUrl(url?: string | null) {
+  return !!url?.includes("douyin.com")
+}
+
 function runtimeSendMessage<T = unknown>(message: object): Promise<T> {
   return new Promise((resolve, reject) => {
     try {
@@ -30,6 +41,61 @@ function runtimeSendMessage<T = unknown>(message: object): Promise<T> {
     } catch (e) {
       reject(e)
     }
+  })
+}
+
+/**
+ * 仅使用「当前窗口 + 当前激活标签」——若该标签不是支持页则返回 undefined。
+ * 不在窗口内回退到其他 B 站/小红书标签，避免多标签同时打开时侧栏显示「别的页面」的评论或跟评上下文串台。
+ */
+function pickActiveCommentCopilotTab(): Promise<chrome.tabs.Tab | undefined> {
+  return new Promise((resolve) => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.query) {
+      resolve(undefined)
+      return
+    }
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      const t0 = tabs[0]
+      if (t0?.url && isCommentCopilotPageUrl(t0.url)) resolve(t0)
+      else resolve(undefined)
+    })
+  })
+}
+
+/** 仅当消息来自 content 且发送方标签就是当前激活标签时执行 cb（避免后台其他标签的 URL_CHANGED / 滚动 干扰侧栏） */
+function whenMessageFromActiveTab(
+  sender: chrome.runtime.MessageSender,
+  cb: () => void
+): void {
+  const sid = sender.tab?.id
+  if (sid == null) return
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    if (chrome.runtime.lastError) return
+    if (tabs[0]?.id === sid) cb()
+  })
+}
+
+/**
+ * 侧栏点击「回复」时焦点常在侧栏，`active tab` 可能不是视频页 → FILL_REPLY 发到错误标签会「完全没反应」。
+ * 优先使用「上次成功拉取评论」的标签；无效时再回退到当前激活的支持页（`pickActiveCommentCopilotTab`）。
+ */
+function resolveZhiyanTargetTab(storedTabId: number | undefined | null): Promise<chrome.tabs.Tab | undefined> {
+  return new Promise((resolve) => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.get) {
+      resolve(undefined)
+      return
+    }
+    if (typeof storedTabId !== "number" || storedTabId < 0) {
+      void pickActiveCommentCopilotTab().then(resolve)
+      return
+    }
+    chrome.tabs.get(storedTabId, (tab) => {
+      if (chrome.runtime.lastError || !tab?.id || !tab.url || !isCommentCopilotPageUrl(tab.url)) {
+        void pickActiveCommentCopilotTab().then(resolve)
+        return
+      }
+      resolve(tab)
+    })
   })
 }
 
@@ -114,6 +180,8 @@ interface PageComment {
   postUrl: string
   emojiUrls?: string[]
   attachmentImageUrls?: string[]
+  /** 抖音：DOM 内已见当前用户在该楼下的子回复，视为已在页上发出 */
+  domSelfReplied?: boolean
 }
 
 interface AiState {
@@ -159,6 +227,14 @@ function applyFilter(list: Comment[], filter: Filter): Comment[] {
 function mergeWithDb(pageComments: PageComment[], dbMap: Map<string, Comment>): Comment[] {
   return pageComments.map((pc) => {
     const db = dbMap.get(pc.platformCommentId)
+    const statusFromDb = db?.status ?? "pending"
+    /** 抖音：页内已见自己的子回复（`domSelfReplied`）时优先于 DB 的 pending，与侧栏填入即已回复互补 */
+    const status =
+      statusFromDb === "done" || statusFromDb === "replied"
+        ? statusFromDb
+        : pc.domSelfReplied
+          ? "replied"
+          : statusFromDb
     return {
       // 统一用 platformCommentId 作为前端列表 ID，避免后端重复数据导致 React key 冲突
       id: pc.platformCommentId,
@@ -167,7 +243,7 @@ function mergeWithDb(pageComments: PageComment[], dbMap: Map<string, Comment>): 
       content: pc.content,
       commentedAt: pc.commentedAt,
       postUrl: pc.postUrl,
-      status: db?.status ?? "pending",
+      status,
       intentLevel: db?.intentLevel ?? null,
       ...(pc.emojiUrls?.length ? { emojiUrls: pc.emojiUrls } : {}),
       ...(pc.attachmentImageUrls?.length ? { attachmentImageUrls: pc.attachmentImageUrls } : {}),
@@ -198,14 +274,8 @@ function ZhiyanPage(props: {
   hotCount: number
   pendingCount: number
   setFilter: (f: Filter) => void
-  /** 页面读不到登录用户身份时，引导去灵主补充昵称（可选） */
-  xhsNickHint?: {
-    show: boolean
-    onGoToAccount: () => void
-    onDismiss: () => void
-  }
-  /** 当前标签是否为小红书笔记详情页 */
-  tabIsXhsNote: boolean
+  /** 当前标签是否为「支持主评 AI」的页面（小红书笔记 / B 站视频等），由 URL 判定 */
+  tabCommentPageKind: CommentCopilotPageKind | null
   /** 笔记下方「主评论」AI（/api/ai/note-comment） */
   noteCommentAi: AiState
   generateNoteComment: () => void
@@ -232,8 +302,7 @@ function ZhiyanPage(props: {
     hotCount,
     pendingCount,
     setFilter,
-    xhsNickHint,
-    tabIsXhsNote,
+    tabCommentPageKind,
     noteCommentAi,
     generateNoteComment,
     fillNoteSuggestion,
@@ -258,7 +327,9 @@ function ZhiyanPage(props: {
 
   return (
     <>
-      <div className={`zhiyan-note-comment-card ${tabIsXhsNote ? "" : "zhiyan-note-comment-card--inactive"}`}>
+      <div
+        className={`zhiyan-note-comment-card ${tabCommentPageKind ? "" : "zhiyan-note-comment-card--inactive"}`}
+      >
         <div className="zhiyan-note-comment-toolbar">
           <button
             type="button"
@@ -267,9 +338,17 @@ function ZhiyanPage(props: {
             aria-expanded={noteCommentExpanded}
           >
             <div className="zhiyan-note-comment-head-text">
-              <span className="zhiyan-note-comment-title">笔记跟评</span>
+              <span className="zhiyan-note-comment-title">
+                {tabCommentPageKind === "bilibili-video" || tabCommentPageKind === "douyin-video"
+                  ? "视频跟评"
+                  : "笔记跟评"}
+              </span>
               {noteCommentExpanded ? (
-                <span className="zhiyan-note-comment-sub">发在笔记下的主评论，非回复某条评论</span>
+                <span className="zhiyan-note-comment-sub">
+                  {tabCommentPageKind === "bilibili-video" || tabCommentPageKind === "douyin-video"
+                    ? "发在视频下的主评论，非回复某条评论"
+                    : "发在笔记下的主评论，非回复某条评论"}
+                </span>
               ) : null}
             </div>
           </button>
@@ -301,9 +380,12 @@ function ZhiyanPage(props: {
           <p className="zhiyan-note-comment-collapsed-hint">AI 思考中…</p>
         ) : null}
         {noteCommentExpanded ? (
-          !tabIsXhsNote ? (
+          !tabCommentPageKind ? (
             <p className="zhiyan-note-comment-hint">
-              请在小红书<strong>笔记详情页</strong>使用此功能（地址栏含 <code>/explore/</code> 或 <code>/discovery/item/</code>）
+              请在当前浏览器<strong>激活标签</strong>打开：小红书<strong>笔记详情页</strong>（<code>/explore/…</code>、
+              <code>/discovery/item/…</code>）、哔哩哔哩<strong>视频播放页</strong>（<code>/video/BV…</code>、
+              <code>/video/av…</code>）或抖音<strong>视频页</strong>（<code>/video/…</code>、<code>?modal_id=…</code>
+              ）后再使用；多标签时请点选要操作的那一列标签。
             </p>
           ) : (
             <>
@@ -394,22 +476,6 @@ function ZhiyanPage(props: {
         </button>
       </div>
 
-      {xhsNickHint?.show && (
-        <div className="zhiyan-xhs-banner" role="status">
-          <p>
-            未能识别当前页登录身份，您自己的评论可能进列表。可到<strong>灵主</strong>补充与主页一致的昵称（多数情况无需填写）。
-          </p>
-          <div className="zhiyan-xhs-banner-actions">
-            <button type="button" className="zhiyan-xhs-banner-btn primary" onClick={xhsNickHint.onGoToAccount}>
-              去灵主填写
-            </button>
-            <button type="button" className="zhiyan-xhs-banner-btn" onClick={xhsNickHint.onDismiss}>
-              知道了
-            </button>
-          </div>
-        </div>
-      )}
-
       {!loading && allComments.length === 0 ? (
         <div className="empty">
           {switching ? (
@@ -420,7 +486,13 @@ function ZhiyanPage(props: {
           ) : (
             <>
               <p>暂无评论</p>
-              <p className="hint">打开小红书笔记页面，评论会自动同步</p>
+              <p className="hint">
+                {tabCommentPageKind === "bilibili-video" || tabCommentPageKind === "douyin-video"
+                  ? "请展开/滚动到评论区，待评论加载后再看侧栏；若仍为空可尝试刷新视频页。"
+                  : tabCommentPageKind === "xhs-note"
+                    ? "打开小红书笔记详情页，评论会自动同步。"
+                    : "打开小红书笔记详情页、哔哩哔哩或抖音视频播放页，评论会自动同步。"}
+              </p>
             </>
           )}
         </div>
@@ -635,41 +707,7 @@ function CunyanPage(props: {
 const FREE_POINTS_QUOTA = 2000
 
 // ─── 页面组件：我的账户 ─────────────────────────────────────────────────────
-function AccountPage({
-  profile,
-  onLogout,
-  onXhsNickSaved,
-}: {
-  profile: UserProfile | null
-  onLogout: () => void
-  /** 传入已保存的昵称（trim 后），空字符串表示用户清空了补充项 */
-  onXhsNickSaved?: (trimmedNick: string) => void
-}) {
-  const [xhsNickInput, setXhsNickInput] = useState("")
-  const [xhsSaveStatus, setXhsSaveStatus] = useState<"idle" | "saved">("idle")
-
-  useEffect(() => {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return
-    chrome.storage.local.get([YANLING_XHS_SELF_NICK_STORAGE_KEY], r => {
-      const v = r[YANLING_XHS_SELF_NICK_STORAGE_KEY]
-      if (typeof v === "string" && v.trim()) {
-        setXhsNickInput(v.trim())
-      } else {
-        setXhsNickInput((profile?.name ?? "").trim())
-      }
-    })
-  }, [profile?.id, profile?.name])
-
-  const saveXhsNick = useCallback(() => {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return
-    const v = xhsNickInput.trim()
-    chrome.storage.local.set({ [YANLING_XHS_SELF_NICK_STORAGE_KEY]: v }, () => {
-      setXhsSaveStatus("saved")
-      onXhsNickSaved?.(v)
-      setTimeout(() => setXhsSaveStatus("idle"), 2000)
-    })
-  }, [xhsNickInput, onXhsNickSaved])
-
+function AccountPage({ profile, onLogout }: { profile: UserProfile | null; onLogout: () => void }) {
   const displayName = profile?.name || profile?.email || "未命名用户"
   const avatarChar = (displayName || "?").slice(0, 1).toUpperCase()
   const email = profile?.email || "—"
@@ -705,23 +743,6 @@ function AccountPage({
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" y1="12" x2="9" y2="12" />
             </svg>
-          </button>
-        </div>
-      </div>
-
-      <div className="account-xhs-card">
-        <div className="account-xhs-title">小红书昵称（可选补充）</div>
-        <div className="account-xhs-row">
-          <input
-            type="text"
-            className="account-xhs-input"
-            placeholder="例如：像我这样的人"
-            value={xhsNickInput}
-            onChange={e => setXhsNickInput(e.target.value)}
-            autoComplete="off"
-          />
-          <button type="button" className="account-xhs-save" onClick={saveXhsNick}>
-            {xhsSaveStatus === "saved" ? "已保存" : "保存"}
           </button>
         </div>
       </div>
@@ -918,59 +939,10 @@ function SidePanel() {
   const [cunyanCategory, setCunyanCategory] = useState<string>("全部")
   const [cunyanSearch, setCunyanSearch] = useState<string>("")
   const [panelToast, setPanelToast] = useState<string | null>(null)
-  /** 由 content 脚本检测：页面读不到登录用户且未在灵主补充昵称 */
-  const [xhsNeedSupplementHint, setXhsNeedSupplementHint] = useState(false)
-  const xhsNeedSupplementHintRef = useRef(false)
-  xhsNeedSupplementHintRef.current = xhsNeedSupplementHint
-  const [xhsBannerDismissed, setXhsBannerDismissed] = useState(false)
-  /** 当前浏览器标签是否为小红书笔记详情页（用于「笔记跟评」） */
-  const [tabIsXhsNote, setTabIsXhsNote] = useState(false)
+  /** 当前标签页类型（URL 判定）：用于「笔记/视频跟评」与评论拉取门禁 */
+  const [tabCommentPageKind, setTabCommentPageKind] = useState<CommentCopilotPageKind | null>(null)
   const [noteCommentAi, setNoteCommentAi] = useState<AiState>({ loading: false, suggestions: [], copied: null })
   const noteCommentInflightRef = useRef(false)
-
-  /** 仅迁移驭灵旧版「小红书昵称」到 chrome.local（不再用后端账号名自动写入，避免与真实小红书昵称不一致） */
-  const syncXhsNickFromAccountAndLegacy = useCallback(async () => {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return
-    const r = await new Promise<Record<string, unknown>>(res => {
-      chrome.storage.local.get([YANLING_XHS_SELF_NICK_STORAGE_KEY], x => res(x as Record<string, unknown>))
-    })
-    const cur = typeof r[YANLING_XHS_SELF_NICK_STORAGE_KEY] === "string" ? r[YANLING_XHS_SELF_NICK_STORAGE_KEY].trim() : ""
-    if (cur) return
-    try {
-      const leg = await storage.get<Record<string, unknown>>(SETTINGS_KEY)
-      const x = leg?.xhsSelfNickname
-      if (typeof x === "string" && x.trim()) {
-        await new Promise<void>(res => {
-          chrome.storage.local.set({ [YANLING_XHS_SELF_NICK_STORAGE_KEY]: x.trim() }, () => res())
-        })
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!userProfile?.id) {
-      setXhsBannerDismissed(false)
-      return
-    }
-    try {
-      setXhsBannerDismissed(localStorage.getItem(`yanling_dismiss_xhs_hint_${userProfile.id}`) === "1")
-    } catch {
-      setXhsBannerDismissed(false)
-    }
-  }, [userProfile?.id])
-
-  useEffect(() => {
-    if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return
-    const fn: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, area) => {
-      if (area !== "local" || !changes[YANLING_XHS_SELF_NICK_STORAGE_KEY]) return
-      const nv = changes[YANLING_XHS_SELF_NICK_STORAGE_KEY].newValue
-      if (typeof nv === "string" && nv.trim()) setXhsNeedSupplementHint(false)
-    }
-    chrome.storage.onChanged.addListener(fn)
-    return () => chrome.storage.onChanged.removeListener(fn)
-  }, [])
 
   /** 供消息回调读取最新列表，避免闭包陈旧 */
   const commentsRef = useRef<Comment[]>([])
@@ -980,6 +952,10 @@ function SidePanel() {
   const pendingScrollToPlatformIdRef = useRef<string | null>(null)
   /** 因滚动联动自动切到「全部」时，跳过「切筛选就滚回顶部」避免冲掉定位 */
   const skipNextFilterScrollResetRef = useRef(false)
+  /** 上次 `fetchComments` 使用的标签（与列表数据一致）；填回复 / 拉帖子须优先用它，避免侧栏抢焦点选错 tab */
+  const zhiyanSourceTabIdRef = useRef<number | undefined>(undefined)
+  /** `tabs.onUpdated` 与切标签对齐，避免同一帖子身份连续触发多次拉取 */
+  const tabUrlFetchDedupeKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!panelToast) return
@@ -1033,12 +1009,11 @@ function SidePanel() {
             total: Number(p.total) || 0,
           } : undefined,
         })
-        await syncXhsNickFromAccountAndLegacy()
       }
     } catch {
       // 静默失败
     }
-  }, [isLoggedIn, sessionExpiredLogout, syncXhsNickFromAccountAndLegacy])
+  }, [isLoggedIn, sessionExpiredLogout])
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -1215,6 +1190,7 @@ function SidePanel() {
   }, [comments, filter, scrollCardIntoView])
 
   const clearPost = useCallback(() => {
+    zhiyanSourceTabIdRef.current = undefined
     setComments([])
     setAiStates({})
     setNoteCommentAi({ loading: false, suggestions: [], copied: null })
@@ -1224,15 +1200,14 @@ function SidePanel() {
     setSwitching(true)
   }, [])
 
-  const isNotePage = useCallback((url?: string) => isXhsNotePageUrl(url), [])
+  /** 是否为支持评论采集的页面（小红书笔记 / B 站或抖音视频页），非仅「笔记」 */
+  const isSupportedCommentPage = useCallback((url?: string) => isCommentCopilotPageUrl(url), [])
 
   // 侧栏打开时同步当前标签是否笔记页（无 URL_CHANGED 时也能显示「笔记跟评」）
   useEffect(() => {
     if (typeof chrome === "undefined" || !chrome.tabs?.query) return
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (chrome.runtime.lastError) return
-      const url = tabs[0]?.url ?? ""
-      setTabIsXhsNote(isXhsNotePageUrl(url))
+    void pickActiveCommentCopilotTab().then(tab => {
+      setTabCommentPageKind(getCommentCopilotPageKind(tab?.url))
     })
   }, [isLoggedIn])
 
@@ -1241,27 +1216,37 @@ function SidePanel() {
   const fetchComments = useCallback(async () => {
     setLoading(true)
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (!isNotePage(tab?.url)) {
+      const tab = await pickActiveCommentCopilotTab()
+      if (!tab?.id || !isSupportedCommentPage(tab.url)) {
+        setTabCommentPageKind(null)
         clearPost()
         setSwitching(false)
         setLoading(false)
         return
       }
+      /** 与下方列表同源：避免仅靠 mount/onActivated 时序导致「已有评论但跟评区仍显示未识别」 */
+      setTabCommentPageKind(getCommentCopilotPageKind(tab.url))
+      zhiyanSourceTabIdRef.current = tab.id
 
       const tenantId = (await storage.get<string>("tenantId")) || DEFAULT_TENANT_ID
       const token = await storage.get<string>(AUTH_TOKEN_KEY)
 
       const [pageResult, dbResult] = await Promise.allSettled([
-        // 1. 从 content script 拿页面全量评论（顺序与小红书一致）
-        runtimeSendMessage<PageComment[]>({ type: "GET_ALL_PAGE_COMMENTS" }),
+        // 1. 从 content script 拿页面全量评论（必须带 tabId，避免侧栏焦点导致选错标签）
+        runtimeSendMessage<PageComment[]>({ type: "GET_ALL_PAGE_COMMENTS", tabId: tab.id }),
         // 2. 拉 DB 补充信息（status / intentLevel / UUID）
         (async () => {
-          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-          const url = tab?.url ?? ""
+          const url = tab.url ?? ""
           const params = new URLSearchParams()
-          if (url.includes("xiaohongshu.com") || url.includes("douyin.com")) {
-            params.set("postUrl", url)
+          if (
+            url.includes("xiaohongshu.com") ||
+            url.includes("douyin.com") ||
+            url.includes("bilibili.com")
+          ) {
+            params.set(
+              "postUrl",
+              url.includes("douyin.com") ? canonicalDouyinPostUrl(url) : url,
+            )
           }
           const res = await fetch(`${API_BASE}/comments?${params}`, {
             headers: {
@@ -1290,13 +1275,26 @@ function SidePanel() {
 
       setComments(list)
       setVisibleRange({ start: 0, end: 20 })
+
+      /** 抖音：页内已见自己的子回复时同步后端标已回复，避免仅本地状态、刷新后又变待处理 */
+      if (tab.url?.includes("douyin.com") && token) {
+        for (const pc of pageComments) {
+          if (!pc.domSelfReplied) continue
+          const db = dbInfoRef.current.get(pc.platformCommentId)
+          if (db?.status === "replied" || db?.status === "done") continue
+          void runtimeSendMessage<{ ok?: boolean }>({
+            type: "MARK_COMMENT_REPLIED",
+            payload: { platformCommentId: pc.platformCommentId, platform: "douyin" },
+          }).catch(() => {})
+        }
+      }
     } catch (e) {
       console.error(e)
     } finally {
       setLoading(false)
       setSwitching(false)
     }
-  }, [isNotePage, clearPost])
+  }, [isSupportedCommentPage, clearPost])
 
   useEffect(() => { fetchComments() }, [fetchComments])
 
@@ -1310,18 +1308,22 @@ function SidePanel() {
 
   // ─── 消息监听 ────────────────────────────────────────────────────────────
   useEffect(() => {
-    const handler = (msg: { type: string; payload?: { platformCommentId: string; url?: string } }) => {
+    const handler = (
+      msg: { type: string; payload?: { platformCommentId: string; url?: string } },
+      sender: chrome.runtime.MessageSender
+    ) => {
       if (msg.type === "URL_CHANGED") {
-        const url = msg.payload?.url ?? ""
-        setTabIsXhsNote(isXhsNotePageUrl(url))
-        clearPost()
-        setXhsNeedSupplementHint(false)
-        setTimeout(fetchComments, 2000)
+        whenMessageFromActiveTab(sender, () => {
+          const url = msg.payload?.url ?? ""
+          setTabCommentPageKind(getCommentCopilotPageKind(url))
+          clearPost()
+          setTimeout(fetchComments, 2000)
+        })
+        return
       }
       if (msg.type === "PAGE_LEFT_NOTE") {
-        setTabIsXhsNote(false)
+        setTabCommentPageKind(null)
         clearPost()
-        setXhsNeedSupplementHint(false)
       }
 
       if (msg.type === "COMMENTS_UPDATED") {
@@ -1329,37 +1331,41 @@ function SidePanel() {
         fetchComments()
       }
 
-      if (msg.type === "XHS_VIEWER_UNRESOLVED") {
-        setXhsNeedSupplementHint(true)
-      }
-      if (msg.type === "XHS_VIEWER_RESOLVED") {
-        setXhsNeedSupplementHint(false)
+      /** 抖音：折叠/展开子回复后 DOM 可见集合变化；仅处理当前激活标签，避免另一窗口/标签的抖音页误触侧栏 */
+      if (msg.type === "PAGE_COMMENTS_DOM_CHANGED") {
+        whenMessageFromActiveTab(sender, () => {
+          setSwitching(false)
+          fetchComments()
+        })
+        return
       }
 
       if (msg.type === "SCROLL_TO_COMMENT" && msg.payload?.platformCommentId) {
-        const pid = msg.payload.platformCommentId
-        const prev = commentsRef.current
-        const fullIdx = prev.findIndex(c => c.platformCommentId === pid)
-        if (fullIdx === -1) return
+        whenMessageFromActiveTab(sender, () => {
+          const pid = msg.payload!.platformCommentId
+          const prev = commentsRef.current
+          const fullIdx = prev.findIndex(c => c.platformCommentId === pid)
+          if (fullIdx === -1) return
 
-        const f = filterRef.current
-        const filtered = applyFilter(prev, f)
-        const idxInFiltered = filtered.findIndex(c => c.platformCommentId === pid)
+          const f = filterRef.current
+          const filtered = applyFilter(prev, f)
+          const idxInFiltered = filtered.findIndex(c => c.platformCommentId === pid)
 
-        if (idxInFiltered >= 0) {
-          setVisibleRange({
-            start: Math.max(0, idxInFiltered - BUFFER),
-            end: Math.min(filtered.length, idxInFiltered + BUFFER + 1),
-          })
-          scrollCardIntoView(filtered[idxInFiltered].id)
-          return
-        }
+          if (idxInFiltered >= 0) {
+            setVisibleRange({
+              start: Math.max(0, idxInFiltered - BUFFER),
+              end: Math.min(filtered.length, idxInFiltered + BUFFER + 1),
+            })
+            scrollCardIntoView(filtered[idxInFiltered].id)
+            return
+          }
 
-        if (f !== "all") {
-          pendingScrollToPlatformIdRef.current = pid
-          skipNextFilterScrollResetRef.current = true
-          setFilter("all")
-        }
+          if (f !== "all") {
+            pendingScrollToPlatformIdRef.current = pid
+            skipNextFilterScrollResetRef.current = true
+            setFilter("all")
+          }
+        })
       }
     }
 
@@ -1372,9 +1378,10 @@ function SidePanel() {
     const onActivated = (info: chrome.tabs.TabActiveInfo) => {
       chrome.tabs.get(info.tabId, (tab) => {
         if (chrome.runtime.lastError) return
-        const note = isXhsNotePageUrl(tab.url)
-        setTabIsXhsNote(note)
-        if (!note) clearPost()
+        const kind = getCommentCopilotPageKind(tab.url)
+        setTabCommentPageKind(kind)
+        tabUrlFetchDedupeKeyRef.current = commentCopilotTabFetchDedupeKey(tab.url)
+        if (!kind) clearPost()
         else fetchComments()
       })
     }
@@ -1382,6 +1389,37 @@ function SidePanel() {
     chrome.tabs.onActivated.addListener(onActivated)
     return () => chrome.tabs.onActivated.removeListener(onActivated)
   }, [clearPost, fetchComments])
+
+  /**
+   * 抖音等 SPA 常用 pushState 更新地址栏（如打开弹层后才带上 modal_id），`URL_CHANGED` 可能晚于或与侧栏时序交错。
+   * 监听当前激活标签的 `url` 变化，与地址栏保持一致，避免必须点开评论区才刷新「视频跟评」。
+   */
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.onUpdated) return
+    let debounce: ReturnType<typeof setTimeout> | null = null
+    const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (!changeInfo.url) return
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        if (chrome.runtime.lastError) return
+        if (tabs[0]?.id !== tabId) return
+        const url = changeInfo.url
+        setTabCommentPageKind(getCommentCopilotPageKind(url))
+        const dedupeKey = commentCopilotTabFetchDedupeKey(url)
+        if (dedupeKey === tabUrlFetchDedupeKeyRef.current) return
+        tabUrlFetchDedupeKeyRef.current = dedupeKey
+        if (debounce != null) clearTimeout(debounce)
+        debounce = setTimeout(() => {
+          debounce = null
+          void fetchComments()
+        }, 160)
+      })
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated)
+    return () => {
+      if (debounce != null) clearTimeout(debounce)
+      chrome.tabs.onUpdated.removeListener(onUpdated)
+    }
+  }, [fetchComments])
 
   // ─── AI 回复 ─────────────────────────────────────────────────────────────
   // 用 inflightRef 按 commentId 维度防重：不同评论互不干扰，同一评论请求中时不重复发
@@ -1391,8 +1429,17 @@ function SidePanel() {
 
     setAiStates(prev => ({ ...prev, [comment.id]: { loading: true, suggestions: [], copied: null } }))
     try {
+      const tab = await resolveZhiyanTargetTab(zhiyanSourceTabIdRef.current)
+      if (!tab?.id) {
+        setAiStates(prev => ({
+          ...prev,
+          [comment.id]: { loading: false, suggestions: [], copied: null, error: "未找到页面标签" },
+        }))
+        return
+      }
       const post = await runtimeSendMessage<{ postTitle?: string; postContent?: string; postUrl?: string }>({
         type: "GET_POST_CONTENT",
+        tabId: tab.id,
       })
       const postTitle = post?.postTitle ?? ""
       const postContent = post?.postContent ?? ""
@@ -1436,8 +1483,15 @@ function SidePanel() {
     noteCommentInflightRef.current = true
     setNoteCommentAi({ loading: true, suggestions: [], copied: null })
     try {
+      /** 跟评必须对应当前正在看的页面，不能用历史 zhiyan 标签（多标签时易串台） */
+      const tab = await pickActiveCommentCopilotTab()
+      if (!tab?.id) {
+        setNoteCommentAi({ loading: false, suggestions: [], copied: null, error: "未找到页面标签" })
+        return
+      }
       const post = await runtimeSendMessage<{ postTitle?: string; postContent?: string; postUrl?: string }>({
         type: "GET_POST_CONTENT",
+        tabId: tab.id,
       })
       const result = await runtimeSendMessage<AiGenResult>({
         type: "GET_AI_NOTE_COMMENT",
@@ -1470,12 +1524,28 @@ function SidePanel() {
   const fillNoteSuggestion = useCallback(async (text: string, index: number) => {
     setNoteCommentAi(prev => ({ ...prev, copied: index }))
     try {
+      const tab = await pickActiveCommentCopilotTab()
+      if (!tab?.id) {
+        await navigator.clipboard.writeText(text)
+        setPanelToast("未找到笔记/视频页标签，请先点回页面再试")
+        return
+      }
       const res = await runtimeSendMessage<{ ok?: boolean; error?: string }>({
         type: "FILL_NOTE_COMMENT",
+        tabId: tab.id,
         payload: { text },
       })
       if (!res?.ok) {
         await navigator.clipboard.writeText(text)
+        if (!isDouyinTabUrl(tab.url)) {
+          const err = res?.error ?? ""
+          if (err === "main_composer_not_found") {
+            setPanelToast("未找到视频页底部主评论框，请先展开评论区并滚到底部；文案已复制到剪贴板")
+          } else {
+            const hint = err ? `：${err}` : ""
+            setPanelToast(`未能写入主评论框${hint}，已复制到剪贴板`)
+          }
+        }
         console.warn("[CommentCopilot] fillNoteComment:", res?.error, (res as { step?: string })?.step ?? "")
       }
     } catch {
@@ -1487,31 +1557,64 @@ function SidePanel() {
   }, [])
 
   const fillReply = useCallback(async (comment: Comment, text: string, index: number) => {
+    const clearCopiedSoon = () => {
+      setTimeout(() => {
+        setAiStates(prev => ({
+          ...prev,
+          [comment.id]: prev[comment.id] ? { ...prev[comment.id], copied: null } : prev[comment.id],
+        }))
+      }, 2000)
+    }
     setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: index } }))
+    let tabForMark: chrome.tabs.Tab | undefined
+    let fillOk = false
     try {
+      const tab = await resolveZhiyanTargetTab(zhiyanSourceTabIdRef.current)
+      tabForMark = tab
+      if (!tab?.id) {
+        await navigator.clipboard.writeText(text)
+        setPanelToast("未找到评论所在标签，请先单击视频或笔记页，再点回复")
+        clearCopiedSoon()
+        return
+      }
       const res = await runtimeSendMessage<{ ok?: boolean; error?: string }>({
         type: "FILL_REPLY",
+        tabId: tab.id,
         payload: { platformCommentId: comment.platformCommentId, text },
       })
       if (!res?.ok) {
         await navigator.clipboard.writeText(text)
+        if (!isDouyinTabUrl(tab.url)) {
+          const err = res?.error ?? ""
+          const hint = err ? `：${err}` : ""
+          setPanelToast(`未能写入页面输入框${hint}，已复制到剪贴板`)
+        }
         console.warn("[CommentCopilot] fillReply fallback to clipboard:", res?.error)
+      } else {
+        fillOk = true
       }
     } catch {
       await navigator.clipboard.writeText(text)
+      if (!isDouyinTabUrl(tabForMark?.url)) {
+        setPanelToast("回复发送失败，文案已复制到剪贴板")
+      }
     }
 
-    // 乐观更新 + 后端同步：失败则回滚
+    clearCopiedSoon()
+
+    // 仅成功写入页面时再标为已回复并同步后端（避免未点开输入框却显示已回复）
+    if (!fillOk) return
+
+    const platform = commentCopilotPlatformFromUrl(tabForMark?.url)
+    /** 抖音 / 小红书 / B 站：只要成功写入输入框即标「已回复」并同步后端（用户要求：写入即视为已处理） */
     const prevStatus = comment.status
-    setComments(prev =>
-      prev.map(c => (c.id === comment.id ? { ...c, status: "replied" } : c))
-    )
+    setComments(prev => prev.map(c => (c.id === comment.id ? { ...c, status: "replied" } : c)))
     try {
       const res = await runtimeSendMessage<{ ok?: boolean }>({
         type: "MARK_COMMENT_REPLIED",
         payload: {
           platformCommentId: comment.platformCommentId,
-          platform: "xiaohongshu",
+          platform,
         },
       })
       if (!res?.ok) {
@@ -1525,21 +1628,6 @@ function SidePanel() {
       )
     }
 
-    setTimeout(() => {
-      setAiStates(prev => ({ ...prev, [comment.id]: { ...prev[comment.id], copied: null } }))
-    }, 2000)
-
-    if (xhsNeedSupplementHintRef.current) {
-      try {
-        const k = "yanling_toast_xhs_after_fill"
-        if (!sessionStorage.getItem(k)) {
-          sessionStorage.setItem(k, "1")
-          setPanelToast("当前页未识别到登录身份，若列表里出现您自己的评论，请到「灵主」补充小红书昵称")
-        }
-      } catch {
-        /* ignore */
-      }
-    }
   }, [])
 
   const toggleSaveReply = useCallback(
@@ -1672,10 +1760,12 @@ function SidePanel() {
     await storage.remove(AUTH_TOKEN_KEY)
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
       await new Promise<void>(res => {
-        chrome.storage.local.remove(YANLING_XHS_SELF_NICK_STORAGE_KEY, () => res())
+        chrome.storage.local.remove(
+          [YANLING_XHS_SELF_NICK_STORAGE_KEY, YANLING_DOUYIN_SELF_NICK_STORAGE_KEY],
+          () => res(),
+        )
       })
     }
-    setXhsNeedSupplementHint(false)
     setNoteCommentAi({ loading: false, suggestions: [], copied: null })
     setIsLoggedIn(false)
     setUserProfile(null)
@@ -1771,15 +1861,7 @@ function SidePanel() {
           </header>
         ) : null}
 
-        {activeNav === "account" && (
-          <AccountPage
-            profile={userProfile}
-            onLogout={handleLogout}
-            onXhsNickSaved={trimmed => {
-              if (trimmed) setXhsNeedSupplementHint(false)
-            }}
-          />
-        )}
+        {activeNav === "account" && <AccountPage profile={userProfile} onLogout={handleLogout} />}
 
         {activeNav === "zhiyan" && (
           <ZhiyanPage
@@ -1802,23 +1884,7 @@ function SidePanel() {
             hotCount={hotCount}
             pendingCount={pendingCount}
             setFilter={setFilter}
-            xhsNickHint={
-              xhsNeedSupplementHint && comments.length > 0 && !xhsBannerDismissed && userProfile?.id
-                ? {
-                    show: true,
-                    onGoToAccount: () => setActiveNav("account"),
-                    onDismiss: () => {
-                      try {
-                        localStorage.setItem(`yanling_dismiss_xhs_hint_${userProfile.id}`, "1")
-                      } catch {
-                        /* ignore */
-                      }
-                      setXhsBannerDismissed(true)
-                    },
-                  }
-                : undefined
-            }
-            tabIsXhsNote={tabIsXhsNote}
+            tabCommentPageKind={tabCommentPageKind}
             noteCommentAi={noteCommentAi}
             generateNoteComment={generateNoteComment}
             fillNoteSuggestion={fillNoteSuggestion}

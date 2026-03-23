@@ -1,6 +1,7 @@
 import type { PlasmoCSConfig } from "plasmo"
 
 import { isXhsNotePageUrl, YANLING_XHS_SELF_NICK_STORAGE_KEY } from "../constants"
+import { createThrottledScan, type ContentFillResult } from "./shared/platform-content-utils"
 
 export const config: PlasmoCSConfig = {
   matches: ["https://www.xiaohongshu.com/*"],
@@ -173,41 +174,8 @@ function extractCommentAuthorUserId(node: Element): string | null {
   return null
 }
 
-/** 灵主页保存的小红书昵称（chrome.storage.local），每次 scan 前刷新 */
+/** 本机扩展存储中的小红书展示昵称（若有），每次 scan 前刷新；用于在页内读不到身份时的兜底过滤 */
 let cachedSelfNicknameOverride: string | null = null
-
-/** 侧栏「需补充昵称」横幅：由页面是否读到登录用户 + chrome 补充昵称共同决定 */
-let lastViewerNotifyKind: "unresolved" | "resolved" | null = null
-let lastViewerNotifyAt = 0
-
-function resetXhsViewerNotifyState() {
-  lastViewerNotifyKind = null
-  lastViewerNotifyAt = 0
-}
-
-/**
- * 在笔记页有评论列表 DOM 时上报：页面读不到 userId/昵称且未在灵主填写 → UNRESOLVED；
- * 读到页面身份 → RESOLVED（防抖，避免刷屏）。
- */
-function notifyXhsViewerHintStatus() {
-  const hint = readXhsViewerHintFromPage()
-  const hasPage = Boolean(hint.nickname?.trim() || hint.userId?.trim())
-  const hasChrome = Boolean(cachedSelfNicknameOverride?.trim())
-
-  const want: "unresolved" | "resolved" | null =
-    !hasPage && !hasChrome ? "unresolved" : hasPage ? "resolved" : null
-
-  if (want == null) return
-
-  const now = Date.now()
-  if (want === lastViewerNotifyKind && now - lastViewerNotifyAt < 60_000) return
-  if (want !== lastViewerNotifyKind && now - lastViewerNotifyAt < 400) return
-
-  lastViewerNotifyKind = want
-  lastViewerNotifyAt = now
-  const type = want === "unresolved" ? "XHS_VIEWER_UNRESOLVED" : "XHS_VIEWER_RESOLVED"
-  chrome.runtime.sendMessage({ type }).catch(() => {})
-}
 
 function loadSelfNicknameOverride(): Promise<void> {
   return new Promise(resolve => {
@@ -428,9 +396,6 @@ async function scanAllComments(): Promise<ScrapedComment[]> {
     }
   })
 
-  // 仅在已出现评论列表容器时上报（避免非笔记页误报）
-  notifyXhsViewerHintStatus()
-
   return results
 }
 
@@ -470,7 +435,6 @@ function onUrlChange() {
   cachedNoteContainer = null
   seenIds.clear()
   viewerHintMemo = null
-  resetXhsViewerNotifyState()
   // 通知侧边栏：URL 已变化（或同一链接再次进入），清空并等待新评论
   chrome.runtime.sendMessage({
     type: "URL_CHANGED",
@@ -484,16 +448,14 @@ function onUrlChange() {
 
 // MutationObserver 监听动态加载的新评论；节流：300ms 内多次 DOM 变化只触发一次扫描，减少 CPU 与消息
 const SCAN_THROTTLE_MS = 300
-let scanThrottleTimer: ReturnType<typeof setTimeout> | null = null
-function runThrottledScan() {
-  if (scanThrottleTimer != null) return
-  scanThrottleTimer = setTimeout(() => {
-    scanThrottleTimer = null
-    void scanAllComments().then(newComments => {
-      if (newComments.length > 0) sendComments(newComments)
-    })
-  }, SCAN_THROTTLE_MS)
-}
+const runThrottledScan = createThrottledScan(
+  SCAN_THROTTLE_MS,
+  async () => {
+    const newComments = await scanAllComments()
+    if (newComments.length > 0) sendComments(newComments)
+  },
+  { label: "xhs" },
+)
 const observer = new MutationObserver(runThrottledScan)
 
 /** 判断是否在单条评论卡片内（与底部「主评论」输入区分）；避免 [class*='comment-item'] 误伤无关模块 */
@@ -1021,7 +983,7 @@ function writeToContentEditable(el: HTMLElement, text: string) {
 }
 
 // 填入回复：找到对应评论节点 → 点击"回复"按钮 → 等输入框弹出 → 填入文字
-async function fillReply(platformCommentId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+async function fillReply(platformCommentId: string, text: string): Promise<ContentFillResult> {
   const nodes = Array.from(document.querySelectorAll(SELECTORS.commentList))
   const targetNode = nodes.find(n => extractCommentId(n) === platformCommentId)
 
@@ -1110,7 +1072,7 @@ function pickMainInputDeep(): HTMLElement | null {
 }
 
 /** 填入笔记下方「主评论」输入框（非回复某条评论） */
-async function fillNoteComment(text: string): Promise<{ ok: boolean; error?: string; step?: string }> {
+async function fillNoteComment(text: string): Promise<ContentFillResult> {
   /** 仅失败时便于侧栏/控制台区分卡在哪一步（主路径成功不返回 step） */
   let lastPhase = "start"
 
@@ -1416,17 +1378,33 @@ function getPostContent(): { postTitle: string; postContent: string; postUrl: st
 // 监听来自 background 的填入指令与数据查询
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "FILL_REPLY") {
-    const { platformCommentId, text } = message.payload
-    fillReply(platformCommentId, text).then(sendResponse)
+    const { platformCommentId, text } = (message as { payload?: { platformCommentId?: string; text?: string } })
+      .payload ?? {}
+    void fillReply(String(platformCommentId ?? ""), String(text ?? ""))
+      .then(sendResponse)
+      .catch((e) => {
+        console.error("[CommentCopilot][xhs] FILL_REPLY", e)
+        sendResponse({ ok: false, error: String(e) })
+      })
     return true
   }
   if (message.type === "FILL_NOTE_COMMENT") {
     const { text } = message.payload as { text: string }
-    fillNoteComment(text).then(sendResponse)
+    void fillNoteComment(text)
+      .then(sendResponse)
+      .catch((e) => {
+        console.error("[CommentCopilot][xhs] FILL_NOTE_COMMENT", e)
+        sendResponse({ ok: false, error: String(e), step: "exception" })
+      })
     return true
   }
   if (message.type === "GET_ALL_PAGE_COMMENTS") {
-    void getAllPageComments().then(sendResponse)
+    void getAllPageComments()
+      .then(sendResponse)
+      .catch((e) => {
+        console.error("[CommentCopilot][xhs] GET_ALL_PAGE_COMMENTS", e)
+        sendResponse([])
+      })
     return true
   }
   if (message.type === "GET_POST_CONTENT") {

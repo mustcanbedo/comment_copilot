@@ -171,7 +171,7 @@ export const PRIVACY_POLICY: { title: string; sections: { title: string; content
           </ul>
           <p>
             <strong>3. 本地补充信息（可选）。</strong>
-            您在「灵主」等界面填写的、用于辅助识别「本人评论」等的<strong>平台展示昵称等设置</strong>，默认保存在本机浏览器扩展存储（如 <code>chrome.storage</code>）中，用于客户端侧过滤与展示逻辑；<strong>不用于构建与您账户无关的第三方用户画像</strong>。若未来为实现某项功能确需同步至服务器，我们将在界面或政策中另行说明并取得必要同意。
+            保存在本机浏览器扩展存储（如 <code>chrome.storage</code>）中、用于辅助识别「本人评论」等的<strong>平台展示类设置</strong>（若有），仅用于客户端侧过滤与展示逻辑；<strong>不用于构建与您账户无关的第三方用户画像</strong>。若未来为实现某项功能确需同步至服务器，我们将在界面或政策中另行说明并取得必要同意。
           </p>
           <p>
             <strong>4. 技术数据。</strong>
