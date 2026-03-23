@@ -44,15 +44,15 @@
 | `architecture-as-built.md` §4.2 描述 AI 回复会写库、更新 `comments.status` | 与 `ai_handler.go` **不符**；已改为与实际一致，并指向 `mark-replied` / TODO 文档 |
 | 同文件 `/api/auth/me` 响应形状过时 | 已与当前 `AuthHandler.Me` 对齐 |
 | 同文件 `/api/health` 鉴权描述错误 | 路由在 `protected` 下，**需 JWT**；已更正 |
-| `roadmap_comment_copilot.md` 仍以 Next.js 为主叙事 | 与现栈脱节；已加页首「现状以 Go 为准」 |
-| 笔记跟评相关三篇文档内容重叠 | **分工**：plan = 执行单；compare = 定案+对比；backend-changes = 速查（已瘦身） |
-| `refactor-auth-and-ui.md` 可能误导新同学 | 在文档中心标为**过程稿**，以代码与 as-built 为准 |
+| `roadmap_comment_copilot.md` 曾以 Next.js 为主叙事 | **已改为精简版**；阶段目标保留，周任务删除 |
+| 笔记跟评相关三篇文档内容重叠 | **分工**：plan = 执行单；compare = 定案+对比；backend-changes = 速查 |
+| `code-review.md` / `refactor-auth-and-ui.md` / `architecture_comment_copilot.md` 过时 | **已删除**（指向已移除的 `web/` 或错误栈描述）；以 as-built + 代码为准 |
 
 ### 2.2 推荐维护规则
 
 1. **契约与数据流**：以 `architecture-as-built.md` 为唯一权威；改路由或 handler 行为时**同一 PR 更新该文件**。
 2. **新功能**：先写/改 `plan-*.md` 或 ADR，落地后把「已实现」并入 as-built，plan 可保留或归档。
-3. **路线图**：大改栈或阶段时更新 roadmap 的「技术栈」段落，避免与 as-built 矛盾。
+3. **路线图**：仅维护阶段目标表；技术细节只写进 as-built，避免双源。
 
 ---
 

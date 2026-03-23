@@ -2,7 +2,7 @@
 
 > 面向后端协作者：描述当前仓库内已实现的后端边界、目录、API 与数据流。
 
-最后更新：2026-03-16
+最后更新：2026-03-11
 
 - **使用逻辑与用户动线**见 [usage-flow.md](usage-flow.md)。
 - **完整文档索引与架构审阅**见 [README.md](README.md)、[architecture-review-note-comment-and-docs.md](architecture-review-note-comment-and-docs.md)。
@@ -157,8 +157,13 @@ Sidepanel → GET_POST_CONTENT（content：标题/正文/postUrl）
 
 | 路径 | 职责 |
 |------|------|
-| `apps/extension/contents/xiaohongshu.ts` | DOM 解析、评论采集、滚动同步 |
-| `apps/extension/sidepanel/index.tsx` | 侧边栏 UI（智言、存言、灵主、驭灵） |
+| `apps/extension/constants.ts` | 各平台 URL 判定、`canonicalDouyinPostUrl`、侧栏拉取去重 key 等 |
+| `apps/extension/constants.test.ts` | URL / platform 单测（Vitest） |
+| `apps/extension/contents/shared/platform-content-utils.ts` | 三端共用：ingest 去重、节流扫描、hash |
+| `apps/extension/contents/xiaohongshu.ts` | 小红书：DOM 采集、滚动同步、填入回复/主评 |
+| `apps/extension/contents/bilibili.ts` | 哔哩哔哩视频页：同上 |
+| `apps/extension/contents/douyin.ts` | 抖音 Web（信息流壳层 + `/video` / `modal_id`）：采集、跟评、滚动同步 |
+| `apps/extension/sidepanel/index.tsx` | 侧边栏 UI（智言、存言、灵主、驭灵）；`tabs.onUpdated` 与当前标签同步 |
 | `apps/extension/sidepanel/legal-content.tsx` | 服务条款、隐私政策内容 |
 | `apps/extension/sidepanel/legal-modal.tsx` | 法律文档弹窗组件 |
 | `apps/extension/sidepanel/login-view.tsx` | 登录/注册页（含法律条款入口） |
