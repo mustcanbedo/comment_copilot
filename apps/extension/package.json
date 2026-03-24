@@ -36,7 +36,7 @@
       "https://www.xiaohongshu.com/*",
       "https://www.douyin.com/*",
       "http://localhost:3000/*",
-      "http://47.103.100.114:13000/*"
+      "https://47.103.100.114/*"
     ],
     "icons": {
       "16": "../assets/yanling_icon_16.png",
