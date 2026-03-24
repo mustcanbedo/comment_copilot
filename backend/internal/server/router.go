@@ -42,11 +42,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		api.POST("/auth/login", deps.AuthHandler.Login(deps.AuthSecret))
 		api.POST("/auth/logout", deps.AuthHandler.Logout)
 		api.POST("/auth/register", deps.AuthHandler.Register)
+		api.GET("/health", deps.HealthHandler.Get)
 
 		protected := api.Group("")
 		protected.Use(middleware.RequireAuth(deps.AuthSecret))
 
-		protected.GET("/health", deps.HealthHandler.Get)
 		protected.GET("/auth/me", deps.AuthHandler.Me)
 		protected.GET("/auth/session", deps.AuthHandler.CompatSession)
 		protected.POST("/auth/session", deps.AuthHandler.CompatSession)
