@@ -40,6 +40,7 @@ Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助内�
 | [docs/plan-note-comment-api-independent-route.md](docs/plan-note-comment-api-independent-route.md) | 笔记跟评 AI：`POST /api/ai/note-comment` 执行单（已定案） |
 | [docs/architecture-review-note-comment-and-docs.md](docs/architecture-review-note-comment-and-docs.md) | 架构审阅（跟评方案 + 文档健康度） |
 | [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与安装 |
+| [docs/chrome-web-store.md](docs/chrome-web-store.md) | **Chrome 网上应用店**上架清单 |
 
 更多（PRD、路线图、库表、方案对比等）见 [docs/README.md](docs/README.md)。
 

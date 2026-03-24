@@ -48,6 +48,12 @@ npm run package
 
 ---
 
+## 提交 Chrome 网上应用店
+
+注册开发者账号、改 `host_permissions`、隐私政策 URL、打包 zip 等完整步骤见 **[chrome-web-store.md](chrome-web-store.md)**。
+
+---
+
 ## 使用前注意
 
 1. **后端地址**：插件请求的 API 地址由 `.env.production` 里的 `PLASMO_PUBLIC_API_URL` 决定。打包前确认已填写正确的后端地址（本地开发用 `http://localhost:3000/api`，线上用部署后的域名）。
