@@ -382,10 +382,12 @@ function ZhiyanPage(props: {
         {noteCommentExpanded ? (
           !tabCommentPageKind ? (
             <p className="zhiyan-note-comment-hint">
-              请在当前浏览器<strong>激活标签</strong>打开：小红书<strong>笔记详情页</strong>（<code>/explore/…</code>、
-              <code>/discovery/item/…</code>）、哔哩哔哩<strong>视频播放页</strong>（<code>/video/BV…</code>、
-              <code>/video/av…</code>）或抖音<strong>视频页</strong>（<code>/video/…</code>、<code>?modal_id=…</code>
-              ）后再使用；多标签时请点选要操作的那一列标签。
+              请先在浏览器里<strong>打开并选中</strong>要操作的标签页：小红书<strong>笔记详情</strong>、哔哩哔哩
+              <strong>视频播放页</strong>，或抖音的<strong>视频页 / 首页·精选等信息流</strong>，再使用本功能。
+              <span className="zhiyan-note-comment-hint-detail">
+                多标签时请<strong>单击</strong>目标标签使其成为当前页。链接里常见 <code>/explore/</code>、
+                <code>/video/</code>、<code>modal_id</code> 等，以实际地址栏为准。
+              </span>
             </p>
           ) : (
             <>
@@ -490,8 +492,8 @@ function ZhiyanPage(props: {
                 {tabCommentPageKind === "bilibili-video" || tabCommentPageKind === "douyin-video"
                   ? "请展开/滚动到评论区，待评论加载后再看侧栏；若仍为空可尝试刷新视频页。"
                   : tabCommentPageKind === "xhs-note"
-                    ? "打开小红书笔记详情页，评论会自动同步。"
-                    : "打开小红书笔记详情页、哔哩哔哩或抖音视频播放页，评论会自动同步。"}
+                    ? "请打开小红书笔记详情页，评论会自动同步。"
+                    : "请打开小红书笔记、哔哩哔哩视频页或抖音视频/信息流页，评论会自动同步。"}
               </p>
             </>
           )}

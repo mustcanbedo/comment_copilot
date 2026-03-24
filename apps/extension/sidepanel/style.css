@@ -635,6 +635,18 @@ body {
   line-height: 1.5;
 }
 
+.zhiyan-note-comment-hint-detail {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.zhiyan-note-comment-hint-detail code {
+  font-size: 10px;
+}
+
 /* 与评论项 ghost「✨ 生成 AI 回复」视觉一致：白底、红框、圆角矩形、悬停反色 */
 .zhiyan-note-comment-generate {
   width: 100%;
