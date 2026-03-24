@@ -5,7 +5,7 @@
 最后更新：2026-03-11
 
 - **使用逻辑与用户动线**见 [usage-flow.md](usage-flow.md)。
-- **完整文档索引与架构审阅**见 [README.md](README.md)、[architecture-review-note-comment-and-docs.md](architecture-review-note-comment-and-docs.md)。
+- **完整文档索引**见 [README.md](README.md)。
 
 ---
 

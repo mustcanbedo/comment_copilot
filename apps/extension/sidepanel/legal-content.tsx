@@ -154,7 +154,7 @@ export const PRIVACY_POLICY: { title: string; sections: { title: string; content
           <ul>
             <li>
               <strong>本地读取：</strong>
-              在您浏览支持的第三方平台页面（如小红书、抖音等）时，扩展仅在您使用产品功能所必需的范围内，读取当前页面上<strong>已向您展示的可见文本</strong>（例如评论正文、展示用的作者昵称、帖子链接、笔记展示区域中与生成建议相关的可见内容等）。读取方式限于您设备上的浏览器环境。
+              在您浏览支持的第三方平台页面（如小红书、哔哩哔哩、抖音等）时，扩展仅在您使用产品功能所必需的范围内，读取当前页面上<strong>已向您展示的可见文本</strong>（例如评论正文、展示用的作者昵称、帖子链接、笔记或视频展示区域中与生成建议相关的可见内容等）。读取方式限于您设备上的浏览器环境。
             </li>
             <li>
               <strong>使用目的（最小必要）：</strong>
@@ -179,7 +179,7 @@ export const PRIVACY_POLICY: { title: string; sections: { title: string; content
           </p>
           <p>
             <strong>5. 扩展权限说明（摘要）。</strong>
-            包括但不限于：<code>storage</code>（登录态与本地设置）、<code>tabs</code>/<code>activeTab</code>（识别当前页面）、对小红书/抖音及后端 API 的 <code>host_permissions</code> 等。具体以浏览器安装时展示的权限为准。
+            包括但不限于：<code>storage</code>（登录态与本地设置）、<code>tabs</code>/<code>activeTab</code>（识别当前页面）、对小红书/哔哩哔哩/抖音及后端 API 的 <code>host_permissions</code> 等。具体以浏览器安装时展示的权限为准。
           </p>
           <p>
             <strong>6. robots.txt。</strong>

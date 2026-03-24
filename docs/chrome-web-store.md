@@ -18,12 +18,12 @@
 
 ### 2.1 `host_permissions`
 
-- **必须与** `.env.production` 里的 `PLASMO_PUBLIC_API_URL` **同源**（含协议、主机、端口）。  
-  例如正式服为 `http://47.103.100.114:13000/api`，则 manifest 中需有 `http://47.103.100.114:13000/*`（当前仓库已按此保留示例；IP 变更时请同步改 `package.json`）。
+- **必须与** `.env.production` 里 `PLASMO_PUBLIC_API_URL` 的 **origin 一致**（协议 + 主机 + **端口**；HTTPS 默认 443 时可不写端口）。  
+  例：当前示例为 `https://47.103.100.114/api` → manifest 需含 `https://47.103.100.114/*`。若 API 在 `https://host:13000`，须声明 `https://host:13000/*`。改域名/IP/端口后同步改 `package.json` 与 `.env.production`。
 - **三站页面**：保留 `https://www.xiaohongshu.com/*`、`https://www.bilibili.com/*`、`https://bilibili.com/*`、`https://www.douyin.com/*`。
-- **本地开发**：可保留 `http://localhost:3000/*`；**提交 Chrome 商店的 zip 里建议去掉 localhost**，只保留正式 API，避免多余权限引发追问。
+- **本地开发**：可保留 `http://localhost:3000/*`；**提交商店的 zip 建议去掉 localhost**，只保留正式 API。
 
-**上架审核提示**：正式环境若仅为 **`http://` + 裸 IP**，部分审核会被要求改为 **HTTPS + 域名**（证书可用 Let’s Encrypt + Nginx 反代）。侧载/企业策略分发则通常不受商店规则限制，但仍建议上 TLS 以保护 Token 与评论内容传输。
+**上架审核提示**：**裸 IP** 有时仍可过审，但可能被追问；**域名 + HTTPS** 更稳妥。若 API 曾用 HTTP，数据安全问卷须如实填写加密情况。
 
 ### 2.2 商店后台「权限说明」
 
@@ -51,7 +51,7 @@
 
 ```bash
 cd apps/extension
-# 确认 .env.production 中 PLASMO_PUBLIC_API_URL 为生产 HTTPS
+# 确认 .env.production 中 PLASMO_PUBLIC_API_URL 与 package.json host_permissions 同源
 npm run build
 npm run package
 ```
@@ -71,6 +71,21 @@ npm run package
 | 小图标 | 已配置 `assets/yanling_icon_*.png`；商店可能还要求 **128×128** 推广图等 |
 | 支持/反馈链接 | 已支持通过 `PLASMO_PUBLIC_FEEDBACK_URL` / GitHub Issues（须公网可访问） |
 
+### 5.1 本文档尚未逐条展开、但控制台常要求的项
+
+上架时在开发者后台逐项核对（以 [Chrome Web Store 当前说明](https://developer.chrome.com/docs/webstore/) 为准）：
+
+| 项 | 说明 |
+|----|------|
+| **隐私政策 HTTPS URL** | 仍缺独立页面时，**整条链路未闭环**（见 §3）。 |
+| **数据安全问卷** | 是否收集邮箱、用户生成内容、用途、是否与第三方共享等；须与隐私政策一致。 |
+| **测试账号（强烈建议）** | 扩展需登录才能用：在审核「备注」提供**只读测试账号**，或说明无账号时的可见范围，减少拒审。 |
+| **商品说明语言** | 至少一种语言完整「说明」；面向全球可再加英文简介。 |
+| **分类 / 单用途** | 选对类别；单用途描述与 §6 一致，避免「万能工具」表述。 |
+| **官网 / 商品 URL（可选）** | 有官网可填，增强可信度。 |
+| **欧盟地区** | 若面向欧盟用户，核对交易者身份、联系方式等披露要求（以控制台提示为准）。 |
+| **宣传图尺寸** | 除截图外，商店可能要求 **440×280**、**920×680**、**1400×560** 等，以**上传页实时要求**为准。 |
+
 ---
 
 ## 6. 审核与合规（摘要）
@@ -86,4 +101,17 @@ npm run package
 
 - 解压安装与本地打包：[extension-packaging.md](extension-packaging.md)  
 - 后端契约与部署：[architecture-as-built.md](architecture-as-built.md)  
+- 功能清单（商店「说明」可摘录）：[product-features.md](product-features.md)  
 - 根目录 [README.md](../README.md) 开发与配置摘要
+
+---
+
+## 8. 对照本文档，你还可能缺什么（汇总）
+
+1. **公开隐私政策 URL**（HTTPS）— 商店硬门槛。  
+2. **上架专用 zip**：去掉 `localhost` 的 `host_permissions`（若当前仍保留）。  
+3. **截图与宣传图**— 按控制台尺寸现做。  
+4. **审核备注 + 测试账号**— 登录型扩展强烈建议写清。  
+5. **数据安全问卷**— 与隐私政策、实际行为（传评论文本、Token、调 AI）一致。  
+6. **域名 + 证书（建议）**— 长期仍用裸 IP 时，接受可能被追问或要求补充材料的风险。  
+7. **上架后 CORS**— 后端将 `chrome-extension://<扩展ID>` 加入白名单（见 [architecture-as-built.md](architecture-as-built.md) 与 `config.yaml` `cors_origins`）。

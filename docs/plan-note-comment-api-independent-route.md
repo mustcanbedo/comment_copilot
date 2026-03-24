@@ -3,7 +3,7 @@
 > **已定技术路线**：采用 **独立路由** `POST /api/ai/note-comment`，与 `POST /api/ai/reply` 并列；**不**扩展 `reply` 的 `mode`。  
 > 目的：URL 与 handler 职责清晰，便于后期迭代（监控、限流、版本化、OpenAPI 拆分）。
 
-**关联文档**：[architecture-review-note-comment-and-docs.md](architecture-review-note-comment-and-docs.md)（架构审阅）、[backend-changes-ai-note-comment.md](backend-changes-ai-note-comment.md)（速查）、[compare-ai-note-comment-api.md](compare-ai-note-comment-api.md)（定案记录）、[usage-flow.md](usage-flow.md) §2.3（产品交互）、[README.md](README.md)（文档中心）。
+**关联文档**：[usage-flow.md](usage-flow.md) §2.3（产品交互）、[architecture-as-built.md](architecture-as-built.md)（已实现契约）、[README.md](README.md)（文档中心）。
 
 最后更新：2026-03-16
 
@@ -152,9 +152,7 @@
 
 | 文档 | 动作 |
 |------|------|
-| [architecture-as-built.md](architecture-as-built.md) | 增加 `POST /api/ai/note-comment` 一行及简要契约 |
-| [backend-changes-ai-note-comment.md](backend-changes-ai-note-comment.md) | 已实现为速查页；实施后更新 as-built 即可 |
-| [compare-ai-note-comment-api.md](compare-ai-note-comment-api.md) | 文首保留「已定案：方案 A」 |
+| [architecture-as-built.md](architecture-as-built.md) | 保持 `POST /api/ai/note-comment` 契约与数据流同步 |
 | [prd_comment_copilot.md](prd_comment_copilot.md) | （可选）补充跟评场景一句 |
 | OpenAPI / 若对外 SDK | 仅增加新 path，不修改 `reply` schema |
 

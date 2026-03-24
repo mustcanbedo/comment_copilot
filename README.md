@@ -31,18 +31,18 @@ Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助内�
 
 ## 文档
 
-**完整索引、按角色阅读路径、架构审阅** → **[docs/README.md](docs/README.md)**
+**完整索引、按角色阅读路径** → **[docs/README.md](docs/README.md)**
 
 | 常用文档 | 说明 |
 |----------|------|
 | [docs/architecture-as-built.md](docs/architecture-as-built.md) | **已实现**后端 API、目录、数据流（与代码同步） |
 | [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑、租户头、积分、合规 |
 | [docs/plan-note-comment-api-independent-route.md](docs/plan-note-comment-api-independent-route.md) | 笔记跟评 AI：`POST /api/ai/note-comment` 执行单（已定案） |
-| [docs/architecture-review-note-comment-and-docs.md](docs/architecture-review-note-comment-and-docs.md) | 架构审阅（跟评方案 + 文档健康度） |
 | [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与安装 |
 | [docs/chrome-web-store.md](docs/chrome-web-store.md) | **Chrome 网上应用店**上架清单 |
+| [docs/product-features.md](docs/product-features.md) | 产品功能（已实现 / 占位 / 规划） |
 
-更多（PRD、路线图、库表、方案对比等）见 [docs/README.md](docs/README.md)。
+更多（PRD、路线图、库表等）见 [docs/README.md](docs/README.md)。
 
 ---
 
