@@ -46,6 +46,8 @@ npm run package
 
 会在 `build/` 下生成 `chrome-mv3-prod.zip`，拷到目标机器解压后同上操作。
 
+**Chrome 网上应用店上传**：须使用不含 `localhost` 的 manifest，请在 `apps/extension` 执行 **`npm run package:store`**（脚本说明见 [chrome-web-store-supplements.md](chrome-web-store-supplements.md) §1），产物路径仍为 `build/chrome-mv3-prod.zip`。
+
 ---
 
 ## 提交 Chrome 网上应用店

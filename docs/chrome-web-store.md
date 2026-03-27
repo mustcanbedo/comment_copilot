@@ -10,7 +10,7 @@
 |----|------|
 | **开发者账号** | [Chrome Web Store Developer Program](https://chrome.google.com/webstore/devconsole) 一次性注册费 **5 美元**（信用卡） |
 | **生产后端** | 须与 `host_permissions` + `PLASMO_PUBLIC_API_URL` 一致；**上架商店时** Google 强烈建议 **HTTPS + 域名**（见 §2.1） |
-| **隐私政策 URL** | 商店**强制**：可匿名访问的 **HTTPS** 页面，内容与扩展数据收集一致 |
+| **隐私政策 URL** | 商店**强制**：可匿名访问的 **HTTPS** 页面，内容与扩展数据收集一致。**已具备**：[言灵仓库《隐私政策》](https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md)（GitHub 以 HTTPS 渲染，匿名可读；须保持与 `legal-content.tsx` 正文同步） |
 
 ---
 
@@ -21,7 +21,7 @@
 - **必须与** `.env.production` 里 `PLASMO_PUBLIC_API_URL` 的 **origin 一致**（协议 + 主机 + **端口**；HTTPS 默认 443 时可不写端口）。  
   例：当前示例为 `https://47.103.100.114/api` → manifest 需含 `https://47.103.100.114/*`。若 API 在 `https://host:13000`，须声明 `https://host:13000/*`。改域名/IP/端口后同步改 `package.json` 与 `.env.production`。
 - **三站页面**：保留 `https://www.xiaohongshu.com/*`、`https://www.bilibili.com/*`、`https://bilibili.com/*`、`https://www.douyin.com/*`。
-- **本地开发**：可保留 `http://localhost:3000/*`；**提交商店的 zip 建议去掉 localhost**，只保留正式 API。
+- **本地开发**：可保留 `http://localhost:3000/*`；**提交商店的 zip 须去掉 localhost**（见 §4 的 `npm run package:store` 与 [chrome-web-store-supplements.md](chrome-web-store-supplements.md) §1）。
 
 **上架审核提示**：**裸 IP** 有时仍可过审，但可能被追问；**域名 + HTTPS** 更稳妥。若 API 曾用 HTTP，数据安全问卷须如实填写加密情况。
 
@@ -39,24 +39,26 @@
 
 ## 3. 隐私政策与服务条款
 
-- 扩展内文案在 `apps/extension/sidepanel/legal-content.tsx`，**商店要的是可打开的 URL**。  
-- 常见做法：  
-  - 用 **GitHub Pages** / 官网静态页发布《隐私政策》《服务条款》全文；或  
-  - 后端提供 `GET /privacy`、`GET /terms` 返回 HTML。  
-- 在开发者控制台「隐私权做法」中填写该 URL，并与「数据安全」问卷一致（是否收集用户数据、是否加密传输等）。
+- **扩展内正文**：`apps/extension/sidepanel/legal-content.tsx`（与公开政策须一致）。  
+- **商店「隐私权做法」URL（当前用法）**：[https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md](https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md) — 公开仓库、HTTPS、无需登录即可阅读。若审核方更偏好「独立域名页面」，可再增加 GitHub Pages / 官网 HTML，但非必须前提。  
+- **《服务条款》**：当前全文可在安装包内「驭灵」法律文档查看；若控制台**单独索要服务条款 URL**，可在 yanling 增加 `docs/terms-of-service.md`（或后端 `GET /terms`）并填同一类公开链接。  
+- 在开发者控制台填写隐私政策 URL 后，**「数据安全」问卷**须与政策一致（邮箱、用户生成内容、传至自有后端与 DeepSeek、HTTPS 等）。
 
 ---
 
 ## 4. 构建与上传包
 
+**提交 Chrome 网上应用店**（manifest 不含 `localhost`）：
+
 ```bash
 cd apps/extension
-# 确认 .env.production 中 PLASMO_PUBLIC_API_URL 与 package.json host_permissions 同源
-npm run build
-npm run package
+# 确认 .env.production 中 PLASMO_PUBLIC_API_URL 与 package.json 中非 localhost 的 API host 一致
+npm run package:store
 ```
 
-上传 **`build/chrome-mv3-prod.zip`**（不要上传解压后的文件夹）。
+**仅本地验证**（可含 `localhost`）：`npm run build` → `npm run package`。
+
+上传 **`build/chrome-mv3-prod.zip`**（不要上传解压后的文件夹）。脚本说明见 [chrome-web-store-supplements.md](chrome-web-store-supplements.md) §1。
 
 版本号：在 `package.json` 的 `version` 与商店「新版本」保持一致（建议上架前改为 `1.0.0` 等语义化版本）。
 
@@ -77,7 +79,7 @@ npm run package
 
 | 项 | 说明 |
 |----|------|
-| **隐私政策 HTTPS URL** | 仍缺独立页面时，**整条链路未闭环**（见 §3）。 |
+| **隐私政策 HTTPS URL** | **已覆盖**：使用 [yanling `docs/privacy-policy.md` 的 blob 链接](https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md)（见 §3）。上架前再点一次确认无需登录、内容为最新。 |
 | **数据安全问卷** | 是否收集邮箱、用户生成内容、用途、是否与第三方共享等；须与隐私政策一致。 |
 | **测试账号（强烈建议）** | 扩展需登录才能用：在审核「备注」提供**只读测试账号**，或说明无账号时的可见范围，减少拒审。 |
 | **商品说明语言** | 至少一种语言完整「说明」；面向全球可再加英文简介。 |
@@ -99,19 +101,33 @@ npm run package
 
 ## 7. 相关文档
 
+- 公开隐私政策（商店 URL）：[yanling `docs/privacy-policy.md`](https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md)  
 - 解压安装与本地打包：[extension-packaging.md](extension-packaging.md)  
 - 后端契约与部署：[architecture-as-built.md](architecture-as-built.md)  
 - 功能清单（商店「说明」可摘录）：[product-features.md](product-features.md)  
+- **上架辅助稿**（zip 脚本、说明文案、审核备注、数据安全对照）：[chrome-web-store-supplements.md](chrome-web-store-supplements.md)  
 - 根目录 [README.md](../README.md) 开发与配置摘要
 
 ---
 
 ## 8. 对照本文档，你还可能缺什么（汇总）
 
-1. **公开隐私政策 URL**（HTTPS）— 商店硬门槛。  
-2. **上架专用 zip**：去掉 `localhost` 的 `host_permissions`（若当前仍保留）。  
-3. **截图与宣传图**— 按控制台尺寸现做。  
-4. **审核备注 + 测试账号**— 登录型扩展强烈建议写清。  
-5. **数据安全问卷**— 与隐私政策、实际行为（传评论文本、Token、调 AI）一致。  
-6. **域名 + 证书（建议）**— 长期仍用裸 IP 时，接受可能被追问或要求补充材料的风险。  
-7. **上架后 CORS**— 后端将 `chrome-extension://<扩展ID>` 加入白名单（见 [architecture-as-built.md](architecture-as-built.md) 与 `config.yaml` `cors_origins`）。
+### 已就绪（相对此前清单）
+
+- **公开隐私政策 URL**：已可用 [yanling 隐私政策](https://github.com/mustcanbedo/yanling/blob/main/docs/privacy-policy.md)；商店「隐私权做法」可直接填此链接（与 §3、`legal-content.tsx` 保持同步即可）。
+
+### 仍须你方在控制台 / 工程里完成
+
+1. **Chrome 开发者账号**（5 美元）与**首次提审包**上传。  
+2. **上架专用 zip**：使用 `npm run package:store`（见 §4、[chrome-web-store-supplements.md](chrome-web-store-supplements.md) §1）；并确认 `PLASMO_PUBLIC_API_URL` 与 manifest 中非 localhost 的 API 权限同源。  
+3. **截图与宣传图**— 按上传页实时尺寸准备（见 §5.1「宣传图尺寸」）。  
+4. **商品说明文案**— 已起草可粘贴稿：[chrome-web-store-supplements.md](chrome-web-store-supplements.md) §2（可按字数微调）。  
+5. **审核备注 + 测试账号**— 模板见 [chrome-web-store-supplements.md](chrome-web-store-supplements.md) §3；**邮箱与密码须你方创建并填入**。  
+6. **数据安全问卷**— 对照稿见 [chrome-web-store-supplements.md](chrome-web-store-supplements.md) §4；须在控制台逐项勾选并与隐私政策一致。  
+7. **上架后 CORS**— 取得正式扩展 ID 后，后端将 `chrome-extension://<扩展ID>` 写入白名单（见 [architecture-as-built.md](architecture-as-built.md) 与 `config.yaml` `cors_origins`）。
+
+### 可选 / 风险项（非「缺 URL」类）
+
+- **API 裸 IP + HTTPS**：仍可能被追问；长期建议 **域名 + 证书**（§2.1）。  
+- **服务条款独立 URL**：若审核或地区披露要求单独链接，再补 `docs/terms-of-service.md` 或静态页（§3）。  
+- **欧盟交易者信息**：若面向欧盟分发，按控制台提示补全联系方式等（§5.1）。

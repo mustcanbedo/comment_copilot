@@ -23,7 +23,7 @@
 | **笔记跟评功能** | [plan-note-comment-api-independent-route.md](plan-note-comment-api-independent-route.md) → 落地后改 as-built |
 | **产品 / 需求** | [product-features.md](product-features.md) → [prd_comment_copilot.md](prd_comment_copilot.md) → [usage-flow.md](usage-flow.md) |
 | **插件打包 / 上架** | [extension-packaging.md](extension-packaging.md) |
-| **Chrome 网上应用店** | [chrome-web-store.md](chrome-web-store.md) |
+| **Chrome 网上应用店** | [chrome-web-store.md](chrome-web-store.md) → [chrome-web-store-supplements.md](chrome-web-store-supplements.md) |
 | **抖音填评/排查** | [troubleshooting-douyin.md](troubleshooting-douyin.md) |
 
 ---
@@ -39,6 +39,7 @@
 | [usage-flow.md](usage-flow.md) | 用户动线、租户头、积分、合规 |
 | [troubleshooting-douyin.md](troubleshooting-douyin.md) | 抖音 Web 回复/跟评排查 |
 | [chrome-web-store.md](chrome-web-store.md) | Chrome 网上应用店上架清单 |
+| [chrome-web-store-supplements.md](chrome-web-store-supplements.md) | 商店 zip 脚本、说明文案、审核备注、数据安全对照稿 |
 
 ### 规划与产品
 
