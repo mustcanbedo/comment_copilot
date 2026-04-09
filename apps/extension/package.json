@@ -40,8 +40,7 @@
       "https://www.bilibili.com/*",
       "https://bilibili.com/*",
       "https://www.douyin.com/*",
-      "http://localhost:3000/*",
-      "https://47.103.100.114/*"
+      "http://localhost:3000/*"
     ],
     "icons": {
       "16": "../assets/yanling_icon_16.png",

@@ -173,11 +173,11 @@ export const AUTH_TOKEN_KEY = "authToken"
 export const API_BASE = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:3000/api"
 export const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
-/** 意见反馈邮箱，用于法律文档展示 */
-export const FEEDBACK_EMAIL = "yanlingmodel@163.com"
+/** 意见反馈邮箱，用于法律文档展示（从环境变量读取，默认 placeholder） */
+export const FEEDBACK_EMAIL = process.env.PLASMO_PUBLIC_FEEDBACK_EMAIL || "feedback@example.com"
 
-/** GitHub 仓库（owner/repo），用于意见反馈跳转 Issues，参考 immersive-translate 做法 */
-const GITHUB_REPO = process.env.PLASMO_PUBLIC_GITHUB_REPO || "mustcanbedo/yanling"
+/** GitHub 仓库（owner/repo），用于意见反馈跳转 Issues（从环境变量读取，默认 placeholder） */
+const GITHUB_REPO = process.env.PLASMO_PUBLIC_GITHUB_REPO || "your-username/your-repo"
 
 /** 意见反馈页 URL（HTTPS），Chrome 商店要求可公开访问，跳转至 GitHub Issues 新建反馈 */
 export const FEEDBACK_URL =
