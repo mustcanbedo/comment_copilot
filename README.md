@@ -33,16 +33,15 @@ Comment Copilot 是一个 Chrome 插件 + Go 后端的组合产品，帮助内�
 
 **完整索引、按角色阅读路径** → **[docs/README.md](docs/README.md)**
 
-| 常用文档 | 说明 |
-|----------|------|
-| [docs/architecture-as-built.md](docs/architecture-as-built.md) | **已实现**后端 API、目录、数据流（与代码同步） |
-| [docs/usage-flow.md](docs/usage-flow.md) | 使用逻辑、租户头、积分、合规 |
-| [docs/plan-note-comment-api-independent-route.md](docs/plan-note-comment-api-independent-route.md) | 笔记跟评 AI：`POST /api/ai/note-comment` 执行单（已定案） |
-| [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与安装 |
-| [docs/chrome-web-store.md](docs/chrome-web-store.md) | **Chrome 网上应用店**上架清单 |
-| [docs/product-features.md](docs/product-features.md) | 产品功能（已实现 / 占位 / 规划） |
+| 文档 | 说明 |
+|------|------|
+| [docs/architecture-as-built.md](docs/architecture-as-built.md) | 后端 API 架构、目录结构、数据流 |
+| [docs/usage-flow.md](docs/usage-flow.md) | 使用流程、租户、积分、合规说明 |
+| [docs/extension-packaging.md](docs/extension-packaging.md) | 插件打包与本地安装 |
+| [docs/chrome-web-store.md](docs/chrome-web-store.md) | Chrome 网上应用店上架指南 |
+| [docs/product-features.md](docs/product-features.md) | 功能说明 |
 
-更多（PRD、路线图、库表等）见 [docs/README.md](docs/README.md)。
+更多文档见 [docs/README.md](docs/README.md)。
 
 ---
 
@@ -104,52 +103,123 @@ comment_copilot/
 
 ---
 
-## 本地开发
+## 快速开始
 
 ### 环境要求
 
 - Go 1.21+
 - Node.js 18+
 - npm
+- PostgreSQL
 
-### 扩展单元测试（URL 判定与共用工具）
+### 1. 克隆与安装
 
 ```bash
-cp backend/config.yaml.example backend/config.yaml   # 填 database_url、deepseek_api_key、auth_secret
-cd apps/extension && npm install
-# macOS arm64 可选：npm install --platform=darwin --arch=arm64v8 sharp
+git clone https://github.com/your-username/comment_copilot.git
+cd comment_copilot
+npm install
 ```
+
+### 2. 配置后端
+
+```bash
+cp backend/config.yaml.example backend/config.yaml
+```
+
+编辑 `backend/config.yaml`：
+
+```yaml
+port: "3000"
+database_url: "postgresql://user:password@localhost:5432/dbname"
+deepseek_api_key: "sk-your-deepseek-key"
+auth_secret: "your-jwt-secret"
+auto_migrate: true
+```
+
+### 3. 启动开发环境
+
+**终端 A - 启动后端：**
+```bash
+npm run dev:backend
+# 或: cd backend && go run ./cmd/server
+```
+
+**终端 B - 启动扩展：**
+```bash
+npm run dev
+# 默认加载 apps/extension/.env.development，连接 localhost:3000
+```
+
+**Chrome 加载扩展：**
+1. 打开 `chrome://extensions/`
+2. 开启「开发者模式」
+3. 点击「加载已解压的扩展程序」
+4. 选择 `apps/extension/.plasmo/chrome-mv3-dev`
+
+### 常用命令
 
 | 命令 | 说明 |
 |------|------|
-| `npm run dev:backend` | 后端 `localhost:3000` |
-| `npm run dev` | 扩展连本地 API（需与上并行） |
-| `npm run dev:prod` | 扩展连 `.env.production` 线上 API |
+| `npm run dev:backend` | 启动后端服务 |
+| `npm run dev` | 启动扩展开发模式 |
+| `npm run dev:prod` | 扩展连接生产 API |
+| `cd apps/extension && npm test` | 运行扩展单元测试 |
 
-扩展：`chrome://extensions/` → 开发者模式 → 加载已解压 → `apps/extension/.plasmo/chrome-mv3-dev`（保持 `npm run dev` 运行）。
+### 故障排查
 
-**单测**：`cd apps/extension && npm test`
-
-**抖音回复/跟评异常** → [docs/troubleshooting-douyin.md](docs/troubleshooting-douyin.md)
-
----
-
-## 配置摘要
-
-**`backend/config.yaml`**：`port`、`database_url`、`deepseek_api_key`、`auth_secret`、`auto_migrate`。积分字段见 `migrations/0004_users_points.sql`。
-
-**扩展**：`apps/extension/.env.development` 中 `PLASMO_PUBLIC_API_URL=http://localhost:3000/api`；生产见 `.env.production`。
+- **抖音回复/跟评异常** → [docs/troubleshooting-douyin.md](docs/troubleshooting-douyin.md)
+- **macOS arm64 sharp 报错** → `cd apps/extension && npm install --platform=darwin --arch=arm64v8 sharp`
 
 ---
 
-## 部署
+## 环境变量配置
+
+### 后端 (`backend/config.yaml`)
+
+| 配置项 | 说明 |
+|--------|------|
+| `port` | 服务端口（默认 3000） |
+| `database_url` | PostgreSQL 连接字符串 |
+| `deepseek_api_key` | DeepSeek API 密钥（必填） |
+| `auth_secret` | JWT 签名密钥 |
+| `auto_migrate` | 是否自动执行数据库迁移 |
+
+### 扩展 (`apps/extension/.env.development` 或 `.env.production`)
+
+| 配置项 | 说明 |
+|--------|------|
+| `PLASMO_PUBLIC_API_URL` | 后端 API 地址 |
+| `PLASMO_PUBLIC_FEEDBACK_EMAIL` | 反馈邮箱（可选） |
+| `PLASMO_PUBLIC_GITHUB_REPO` | GitHub 仓库名，用于反馈链接（可选） |
+
+---
+
+## 生产部署
+
+### 后端
 
 ```bash
-cd backend && go build -o server ./cmd/server && ./server
-cd apps/extension && npm run build   # → build/chrome-mv3-prod
+cd backend
+go build -o server ./cmd/server
+./server
 ```
 
-打包上架细节见 [docs/extension-packaging.md](docs/extension-packaging.md)。
+### 扩展
+
+```bash
+cd apps/extension
+
+# 1. 创建生产配置
+cp .env.production.example .env.production
+# 编辑 .env.production 填入生产 API 地址
+
+# 2. 构建商店包（会自动注入 host_permissions）
+npm run package:store
+
+# 产物：build/chrome-mv3-prod.zip
+```
+
+更多部署细节见 [docs/extension-packaging.md](docs/extension-packaging.md) 和 [docs/chrome-web-store.md](docs/chrome-web-store.md)。
 
 ---
 
