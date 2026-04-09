@@ -1,14 +1,58 @@
 {
-  "name": "comment-copilot-extension",
+  "name": "yanling-extension",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "plasmo dev",
-    "build": "plasmo build"
+    "dev": "plasmo dev --hmr-host=localhost --hmr-port=1815",
+    "dev:prod": "plasmo dev --env=.env.production --hmr-host=localhost --hmr-port=1815",
+    "build": "plasmo build",
+    "package": "plasmo package",
+    "package:store": "node ./scripts/package-for-store.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@plasmohq/storage": "^1.13.0",
     "plasmo": "^0.86.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.300",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.5"
+  },
+  "manifest": {
+    "name": "言灵 Yanling",
+    "description": "小红书 / 哔哩哔哩 / 抖音 等评论区 AI 助手 —— 用 AI 回评论，点燃言灵力",
+    "permissions": [
+      "storage",
+      "activeTab",
+      "sidePanel",
+      "scripting",
+      "tabs"
+    ],
+    "host_permissions": [
+      "https://www.xiaohongshu.com/*",
+      "https://www.bilibili.com/*",
+      "https://bilibili.com/*",
+      "https://www.douyin.com/*",
+      "http://localhost:3000/*"
+    ],
+    "icons": {
+      "16": "../assets/yanling_icon_16.png",
+      "32": "../assets/yanling_icon_32.png",
+      "48": "../assets/yanling_icon_48.png",
+      "128": "../assets/yanling_icon_128.png"
+    },
+    "action": {
+      "default_icon": {
+        "16": "../assets/yanling_icon_16.png",
+        "32": "../assets/yanling_icon_32.png"
+      }
+    }
   }
 }

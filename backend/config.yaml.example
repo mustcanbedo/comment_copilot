@@ -1,0 +1,9 @@
+port: "3001"
+database_url: "postgresql://"
+deepseek_api_key: "sk-xxxx"
+auth_secret: "change-me-in-production"
+auto_migrate: false
+# 生产环境建议配置 CORS 白名单，如：
+# cors_origins:
+#   - "chrome-extension://your-extension-id"
+#   - "https://your-domain.com"
